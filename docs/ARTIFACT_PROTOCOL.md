@@ -5,12 +5,20 @@ must do to render them.
 
 ## Contract in one paragraph
 
-Every file the agent produces lands under `{workspace}/output/`. Box-Agent
-sends one `tool_call_update` per artifact, with `rawOutput.type ==
+Every explicitly reported artifact lands under `{workspace}/output/`. Box-Agent
+sends one `tool_call_update` per attributable artifact, with `rawOutput.type ==
 "artifact"` as the only discriminator. The host listens for that type, reads
 the structured payload, and renders or downloads the file from `rel_path` /
 `uri`. Markdown links inside `agent_message_chunk` text are decoration only —
 do not parse them as the source of truth for files.
+
+Artifact receipts carry runtime-owned `session_id`, `task_id`, `turn_id`, and
+`tool_call_id`. Box-Agent binds these fields at the Tool invocation boundary,
+overwriting conflicting Tool-provided values before the receipt is persisted.
+Trusted workflows may declare one primary output for a Tool invocation so a
+Bash-produced deliverable can use the same receipt without a directory scan.
+Directory-wide file changes without such a receipt may still be shown by a
+host as change history, but must not be registered as tool-owned artifacts.
 
 ## Wire format
 
@@ -28,6 +36,9 @@ do not parse them as the source of truth for files.
   "size": 12480,
   "sha256": "a1b2c3d4e5f60718",
   "produced_at": "2026-05-14T09:41:40+08:00",
+  "session_id": "session_xxx",
+  "task_id": "task_xxx",
+  "turn_id": "turn_xxx",
   "tool_call_id": "call_xxx",
   "output_dir": "/Users/me/ws/output"
 }
@@ -47,6 +58,9 @@ do not parse them as the source of truth for files.
 | `size`         | integer        | Byte size. `-1` if unavailable. |
 | `sha256`       | string         | First 16 hex chars of SHA-256. Stable cache/dedup key — same content ⇒ same hash. Empty when the file is too large to hash (>64 MB). |
 | `produced_at`  | string (ISO-8601) | Timezone-aware timestamp of detection. |
+| `session_id`   | string         | Host-owned session identity bound by the runtime. |
+| `task_id`      | string         | Host-owned task/delivery identity bound by the runtime. |
+| `turn_id`      | string         | Host-owned turn identity bound by the runtime. |
 | `tool_call_id` | string         | Tool call that produced the artifact. The same id appears on the `tool_call_update`, so the host already knows which call to attach this to. |
 | `output_dir`   | string         | Absolute path of `{workspace}/output/` for this session. Useful when listing all artifacts in a panel. |
 | `layout_id`    | string, optional | Controlled layout identifier. Present only for recognized artifacts such as `roadmap-swimlane-v1`. |

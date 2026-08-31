@@ -15,7 +15,7 @@ from .events import ArtifactEvent
 from .task_context import TaskContext
 
 
-REGISTRY_SCHEMA_VERSION = 1
+REGISTRY_SCHEMA_VERSION = 2
 
 
 def _now() -> str:
@@ -172,12 +172,19 @@ def register_artifact_revision(
     content_sha256 = _content_sha256(Path(artifact.abs_path), artifact.sha256)
     revision_key = f"{artifact_id}\0{content_sha256}\0{artifact.size}"
     revision_id = f"revision_{hashlib.sha256(revision_key.encode()).hexdigest()[:24]}"
+    receipt = {
+        "session_id": context.session_id,
+        "task_id": context.task_id,
+        "turn_id": context.turn_id,
+        "tool_call_id": artifact.tool_call_id,
+        "produced_at": artifact.produced_at,
+    }
     revision = {
         "artifact_revision_id": revision_id,
-        "turn_id": context.turn_id,
+        **receipt,
         "sha256": content_sha256,
         "size": artifact.size,
-        "produced_at": artifact.produced_at,
+        "receipts": [receipt],
     }
     artifacts = payload.setdefault("artifacts", [])
     record = next(
@@ -199,11 +206,31 @@ def register_artifact_revision(
         }
         artifacts.append(record)
     revisions = record.setdefault("revisions", [])
-    if not any(
-        isinstance(item, dict) and item.get("artifact_revision_id") == revision_id
-        for item in revisions
-    ):
+    existing_revision = next(
+        (
+            item
+            for item in revisions
+            if isinstance(item, dict)
+            and item.get("artifact_revision_id") == revision_id
+        ),
+        None,
+    )
+    if existing_revision is None:
         revisions.append(revision)
+    else:
+        receipts = existing_revision.setdefault("receipts", [])
+        if not any(
+            isinstance(item, dict)
+            and item.get("session_id") == receipt["session_id"]
+            and item.get("task_id") == receipt["task_id"]
+            and item.get("turn_id") == receipt["turn_id"]
+            and item.get("tool_call_id") == receipt["tool_call_id"]
+            for item in receipts
+        ):
+            receipts.append(receipt)
+        # Keep the direct fields as the latest receipt for simple consumers;
+        # ``receipts`` retains every exact production of identical bytes.
+        existing_revision.update(receipt)
     record["current_revision_id"] = revision_id
     payload["updated_at"] = _now()
     _write_record(registry_path, payload)

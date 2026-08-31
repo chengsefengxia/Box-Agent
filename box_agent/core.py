@@ -947,6 +947,7 @@ async def _negotiate_tool_permission_chain(
     tool: Tool | None,
     arguments: dict[str, Any],
     retry_offer_error: Callable[[], str | None],
+    invocation_context: ToolInvocationContext | None = None,
     on_retry: Callable[[ToolResult], None] | None = None,
 ) -> tuple[ToolResult, dict[str, Any] | None]:
     """Negotiate distinct permission gates until the tool can execute.
@@ -1049,7 +1050,7 @@ async def _negotiate_tool_permission_chain(
         else:
             _approve_tool_permission(tool, permission_request)
             try:
-                result = await tool.invoke(arguments)
+                result = await tool.invoke(arguments, context=invocation_context)
             except Exception as exc:
                 detail = f"{type(exc).__name__}: {exc!s}"
                 trace = traceback.format_exc()
@@ -1302,12 +1303,44 @@ def _detect_regex_artifacts(
     workspace_dir: str,
     artifact_root_dir: str | Path | None,
 ) -> tuple[list[ArtifactEvent], set[str]]:
-    """Layer-1 (regex) artifacts for one tool result.
+    """Collect explicitly attributable artifacts for one tool result.
 
-    Returns the regex-detected artifacts plus the set of absolute paths that
-    should be excluded from the later diff layer (those already surfaced here,
-    or carried on a ``type:"artifact"`` ``raw_output``).
+    A structured ``type:"artifact"`` receipt is authoritative and is bound to
+    the current tool call after its path is verified inside the artifact root.
+    Regex references remain a compatibility fallback for older tools.
     """
+    explicit_artifacts: list[ArtifactEvent] = []
+    already: set[str] = set()
+    if isinstance(raw_output, dict) and raw_output.get("type") == "artifact":
+        workspace = Path(workspace_dir).expanduser().resolve()
+        artifact_root = _artifact_scan_root(
+            workspace_dir,
+            artifact_root_dir,
+        ).resolve()
+        for key in ("abs_path", "absolute_path", "path", "rel_path"):
+            raw_path = raw_output.get(key)
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            candidate = Path(raw_path.strip()).expanduser()
+            if not candidate.is_absolute():
+                candidate = workspace / candidate
+            candidate = candidate.resolve()
+            try:
+                candidate.relative_to(artifact_root)
+            except ValueError:
+                continue
+            if not candidate.is_file():
+                continue
+            artifact = _make_artifact(tool_call_id, candidate, workspace)
+            explicit_artifacts.append(artifact)
+            already.add(artifact.abs_path)
+            break
+
+    # A verified structured receipt is the complete ownership claim for this
+    # invocation. Do not widen it with filenames merely mentioned in stdout.
+    if explicit_artifacts:
+        return explicit_artifacts, already
+
     regex_artifacts = _detect_artifacts(
         tool_call_id,
         tool_name,
@@ -1315,13 +1348,12 @@ def _detect_regex_artifacts(
         workspace_dir,
         artifact_root_dir,
     )
-    already = {a.abs_path for a in regex_artifacts}
-    if isinstance(raw_output, dict) and raw_output.get("type") == "artifact":
-        for key in ("abs_path", "absolute_path"):
-            raw_path = raw_output.get(key)
-            if isinstance(raw_path, str) and raw_path.strip():
-                already.add(str(Path(raw_path).expanduser().resolve()))
-    return regex_artifacts, already
+    for artifact in regex_artifacts:
+        if artifact.abs_path in already:
+            continue
+        explicit_artifacts.append(artifact)
+        already.add(artifact.abs_path)
+    return explicit_artifacts, already
 
 
 def _detect_tool_artifacts(
@@ -1333,23 +1365,48 @@ def _detect_tool_artifacts(
     post_files: dict[Path, tuple[int, int]],
     workspace_dir: str,
     artifact_root_dir: str | Path | None,
+    artifact_diff_detection_enabled: bool,
 ) -> list[ArtifactEvent]:
     """Two-layer artifact detection for a single tool result (sequential path).
 
-    Layer 1 (regex): scan ``content`` for ``[filename.ext]`` references that
-    resolve under the artifact root. Layer 2 (diff): catch files created or
-    modified by the tool that weren't referenced in the output text, using a
-    per-tool pre/post signature snapshot. The parallel branch can't take per-tool snapshots under
-    concurrency, so it composes :func:`_detect_regex_artifacts` per result with
-    a single diff pass instead (see the parallel block in ``run_agent_loop``).
+    Layer 1 uses structured receipts and compatible output references. Layer 2
+    uses a per-tool pre/post signature diff only when the host explicitly
+    allows inference. Parallel batches use the diff fallback only when they
+    contain exactly one tool call.
     """
-    regex_artifacts, already = _detect_regex_artifacts(
+    explicit_artifacts, already = _detect_regex_artifacts(
         tool_call_id, tool_name, content, raw_output, workspace_dir, artifact_root_dir
     )
+    if explicit_artifacts or not artifact_diff_detection_enabled:
+        return explicit_artifacts
     diff_artifacts = _detect_changed_files(
         tool_call_id, pre_files, post_files, already, workspace_dir
     )
-    return [*regex_artifacts, *diff_artifacts]
+    return [*explicit_artifacts, *diff_artifacts]
+
+
+def _declared_artifact_path(
+    workflow_policy: WorkflowPolicy | None,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> str:
+    """Resolve one trusted invocation output without scanning shared directories."""
+
+    if workflow_policy is None:
+        return ""
+    resolver = getattr(workflow_policy, "declared_artifact_path", None)
+    if not callable(resolver):
+        return ""
+    try:
+        declared = resolver(tool_name, arguments)
+    except Exception as exc:
+        _log.warning(
+            "workflow/artifact_declaration_failed tool=%s error=%s",
+            tool_name,
+            exc,
+        )
+        return ""
+    return declared if isinstance(declared, str) else ""
 
 
 # ── Summarization ───────────────────────────────────────────────
@@ -2906,6 +2963,7 @@ async def run_agent_loop(
     inject_queue: asyncio.Queue[Any] | None = None,
     thinking_enabled: bool = False,
     session_id: str = "",
+    task_id: str = "",
     turn_id: str = "",
     title: str = "",
     call_kind: str = "",
@@ -2924,6 +2982,7 @@ async def run_agent_loop(
     max_truncated_tool_call_retries: int = 3,
     truncated_tool_call_boost_cap: int = 32768,
     artifact_detection_enabled: bool = True,
+    artifact_diff_detection_enabled: bool = True,
     artifact_root_dir: str | Path | None = None,
     cache_fingerprint_context: dict[str, Any] | None = None,
     cache_fingerprint_sink: Callable[[dict[str, Any]], None] | None = None,
@@ -2978,6 +3037,8 @@ async def run_agent_loop(
             When present, queued user messages are drained at each
             step boundary and appended to the conversation before
             the next LLM call.
+        task_id: Optional host-owned delivery lineage shared by this turn's
+            artifact receipts.
         require_plan_approval: If True, the loop must publish a plan and
             stop before executing non-plan tools unless ``plan_approval``
             carries an approved decision.
@@ -2995,6 +3056,10 @@ async def run_agent_loop(
         artifact_detection_enabled: If False, skip output-directory artifact
             snapshotting and detection for sessions that edit an existing
             project tree directly.
+        artifact_diff_detection_enabled: If False, only emit artifacts backed
+            by an explicit tool receipt or output reference. This must be
+            disabled when concurrent sessions share an artifact directory,
+            because a directory diff cannot prove which tool created a file.
         truncation_continuation_enabled: If True (default), re-prompt the
             model once when a reply ends mid-sentence while the provider
             reported a normal finish, so the answer completes in the same
@@ -5703,7 +5768,13 @@ async def run_agent_loop(
 
             # Snapshot workspace before tool execution for diff-based artifact detection
             pre_files: dict[Path, tuple[int, int]] = {}
-            if artifact_detection_enabled and allowed_to_execute and tool_user_visible and workspace_dir:
+            if (
+                artifact_detection_enabled
+                and artifact_diff_detection_enabled
+                and allowed_to_execute
+                and tool_user_visible
+                and workspace_dir
+            ):
                 pre_files = _snapshot_workspace_signatures(
                     workspace_dir,
                     artifact_root_dir,
@@ -5734,6 +5805,15 @@ async def run_agent_loop(
                                 context=ToolInvocationContext(
                                     event_queue=event_queue,
                                     parent_tool_call_id=tc_id,
+                                    session_id=session_id,
+                                    task_id=task_id,
+                                    turn_id=turn_id,
+                                    tool_call_id=tc_id,
+                                    artifact_path=_declared_artifact_path(
+                                        workflow_policy,
+                                        fn_name,
+                                        a,
+                                    ),
                                 ),
                             )
                         except SessionLogDurabilityError:
@@ -5803,7 +5883,20 @@ async def run_agent_loop(
                     exec_task: asyncio.Task[ToolResult] | None = None
                     try:
                         exec_task = asyncio.create_task(
-                            offered_tools_by_name[fn_name].invoke(fn_args)
+                            offered_tools_by_name[fn_name].invoke(
+                                fn_args,
+                                context=ToolInvocationContext(
+                                    session_id=session_id,
+                                    task_id=task_id,
+                                    turn_id=turn_id,
+                                    tool_call_id=tc_id,
+                                    artifact_path=_declared_artifact_path(
+                                        workflow_policy,
+                                        fn_name,
+                                        fn_args,
+                                    ),
+                                ),
+                            )
                         )
                         while True:
                             done, _ = await asyncio.wait(
@@ -5890,6 +5983,17 @@ async def run_agent_loop(
                     tool_name=fn_name,
                     tool=offered_tools_by_name.get(fn_name),
                     arguments=fn_args,
+                    invocation_context=ToolInvocationContext(
+                        session_id=session_id,
+                        task_id=task_id,
+                        turn_id=turn_id,
+                        tool_call_id=tc_id,
+                        artifact_path=_declared_artifact_path(
+                            workflow_policy,
+                            fn_name,
+                            fn_args,
+                        ),
+                    ),
                     retry_offer_error=lambda: (
                         f"Unknown tool: {fn_name}"
                         if fn_name not in offered_tools_by_name
@@ -6111,9 +6215,13 @@ async def run_agent_loop(
 
             # Detect and yield structured artifacts (images, files) from tool output
             if artifact_detection_enabled and result.success and workspace_dir:
-                post_files = _snapshot_workspace_signatures(
-                    workspace_dir,
-                    artifact_root_dir,
+                post_files = (
+                    _snapshot_workspace_signatures(
+                        workspace_dir,
+                        artifact_root_dir,
+                    )
+                    if artifact_diff_detection_enabled
+                    else {}
                 )
                 for artifact in _detect_tool_artifacts(
                     tc_id,
@@ -6124,6 +6232,7 @@ async def run_agent_loop(
                     post_files,
                     workspace_dir,
                     artifact_root_dir,
+                    artifact_diff_detection_enabled,
                 ):
                     yield artifact
 
@@ -6137,11 +6246,18 @@ async def run_agent_loop(
 
         # 2. Parallel execution for parallel_safe tools (e.g. generate_image, sub_agent)
         if parallel_calls:
-            # Snapshot the workspace BEFORE any parallel tool runs. Per-tool
-            # snapshots are impossible under concurrency, so the diff layer uses
-            # one pre/post pair for the whole batch (see after the result loop).
+            # A batch diff can only be attributed when exactly one call runs.
+            # Multiple concurrent calls must provide explicit artifact receipts.
+            sole_parallel_call = (
+                next(iter(parallel_calls)) if len(parallel_calls) == 1 else None
+            )
             par_pre_files: dict[Path, tuple[int, int]] = {}
-            if artifact_detection_enabled and workspace_dir:
+            if (
+                artifact_detection_enabled
+                and artifact_diff_detection_enabled
+                and workspace_dir
+                and sole_parallel_call is not None
+            ):
                 par_pre_files = _snapshot_workspace_signatures(
                     workspace_dir,
                     artifact_root_dir,
@@ -6293,15 +6409,26 @@ async def run_agent_loop(
             async def _invoke_parallel_tool(tc):
                 tool = offered_tools_by_name[tc.function.name]
                 fn_args = par_args_map[tc.id]
-                if isinstance(tool, EventEmittingTool):
-                    return await tool.invoke(
-                        fn_args,
-                        context=ToolInvocationContext(
-                            event_queue=par_event_queue,
-                            parent_tool_call_id=tc.id,
+                return await tool.invoke(
+                    fn_args,
+                    context=ToolInvocationContext(
+                        event_queue=(
+                            par_event_queue if isinstance(tool, EventEmittingTool) else None
                         ),
-                    )
-                return await tool.invoke(fn_args)
+                        parent_tool_call_id=(
+                            tc.id if isinstance(tool, EventEmittingTool) else ""
+                        ),
+                        session_id=session_id,
+                        task_id=task_id,
+                        turn_id=turn_id,
+                        tool_call_id=tc.id,
+                        artifact_path=_declared_artifact_path(
+                            workflow_policy,
+                            tc.function.name,
+                            fn_args,
+                        ),
+                    ),
+                )
 
             async def _run_parallel(tc):
                 fn_name = tc.function.name
@@ -6534,6 +6661,17 @@ async def run_agent_loop(
                         tool_name=fn_name,
                         tool=offered_tools_by_name.get(fn_name),
                         arguments=fn_args,
+                        invocation_context=ToolInvocationContext(
+                            session_id=session_id,
+                            task_id=task_id,
+                            turn_id=turn_id,
+                            tool_call_id=tc_id,
+                            artifact_path=_declared_artifact_path(
+                                workflow_policy,
+                                fn_name,
+                                fn_args,
+                            ),
+                        ),
                         retry_offer_error=lambda: (
                             f"Unknown tool: {fn_name}"
                             if fn_name not in offered_tools_by_name
@@ -6754,16 +6892,21 @@ async def run_agent_loop(
                         yield artifact
                     par_already_emitted |= regex_already
 
-            # Artifact detection — layer 2 (diff), once for the whole batch.
-            # Concurrency rules out per-tool snapshots, so new files are
-            # attributed to the first parallel call's id.
-            if artifact_detection_enabled and workspace_dir and parallel_calls:
+            # Diff fallback is safe only for a single parallel-safe call and
+            # only when that call did not provide an explicit artifact receipt.
+            if (
+                artifact_detection_enabled
+                and artifact_diff_detection_enabled
+                and workspace_dir
+                and sole_parallel_call is not None
+                and not par_already_emitted
+            ):
                 par_post_files = _snapshot_workspace_signatures(
                     workspace_dir,
                     artifact_root_dir,
                 )
                 for artifact in _detect_changed_files(
-                    parallel_calls[0].id,
+                    sole_parallel_call.id,
                     par_pre_files,
                     par_post_files,
                     par_already_emitted,

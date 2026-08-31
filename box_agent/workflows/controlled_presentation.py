@@ -3278,6 +3278,61 @@ class ControlledPresentationPolicy:
             return apply_redesign_error
         return _finalize_error(self.stage, tool_name, arguments)
 
+    def declared_artifact_path(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> str | None:
+        """Declare the primary file written by an allowed controlled Bash call."""
+
+        if tool_name != "bash":
+            return None
+        artifact_root = artifact_scan_root(
+            self.workspace_dir,
+            self.artifact_root_dir,
+        )
+        if artifact_root is None:
+            return None
+        if (
+            self.stage == "scaffold"
+            and self.scaffold_input is not None
+            and _scaffold_error(tool_name, arguments, self.scaffold_input) is None
+        ):
+            return str((artifact_root / "deck.json").resolve(strict=False))
+        if (
+            self.stage == "apply_patch"
+            and _apply_patch_error(
+                self.stage,
+                tool_name,
+                arguments,
+                repair_allowed=self.apply_patch_repair_allowed,
+                repair_paths=self.apply_patch_repair_paths,
+                workspace_dir=self.workspace_dir,
+                artifact_root_dir=self.artifact_root_dir,
+                staged_write_id=self._apply_patch_staged_write_id,
+            )
+            is None
+        ):
+            return str((artifact_root / "deck.json").resolve(strict=False))
+        if (
+            self.stage == "apply_redesign"
+            and _apply_redesign_error(
+                self.stage,
+                tool_name,
+                arguments,
+                self.workspace_dir,
+                self.artifact_root_dir,
+            )
+            is None
+        ):
+            return str((artifact_root / "deck.json").resolve(strict=False))
+        if (
+            self.stage == "finalize"
+            and _finalize_error(self.stage, tool_name, arguments) is None
+        ):
+            return str((artifact_root / "index.html").resolve(strict=False))
+        return None
+
     def _clear_step_failure(self, stage: str) -> None:
         if self._last_step_failure_signature is None:
             return

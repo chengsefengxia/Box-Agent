@@ -2936,6 +2936,7 @@ async def test_acp_project_artifact_mode_does_not_create_output(tmp_path):
     assert not (tmp_path / "output").exists()
     assert state.output_dir == str(tmp_path / "output")
     assert state.artifact_mode == "project"
+    assert state.agent.tools["sub_agent"]._artifact_diff_detection_enabled is False
     bash_tool = state.agent.tools["bash"]
     assert Path(bash_tool.workspace_dir) == tmp_path.resolve()
     assert bash_tool._subprocess_env["BOX_AGENT_OUTPUT_DIR"] == str(
@@ -3140,11 +3141,20 @@ def test_acp_artifact_raw_output_gets_session_metadata():
         None,
         session_id="office-session-a",
         output_dir="/tmp/session-a/output",
+        task_id="task-a",
+        turn_id="turn-a",
+        tool_call_id="call-a",
     )
 
     assert output["session_id"] == "office-session-a"
     assert output["sessionId"] == "office-session-a"
     assert output["output_dir"] == "/tmp/session-a/output"
+    assert output["task_id"] == "task-a"
+    assert output["taskId"] == "task-a"
+    assert output["turn_id"] == "turn-a"
+    assert output["turnId"] == "turn-a"
+    assert output["tool_call_id"] == "call-a"
+    assert output["toolCallId"] == "call-a"
 
 
 @pytest.mark.asyncio

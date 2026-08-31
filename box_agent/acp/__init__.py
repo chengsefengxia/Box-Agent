@@ -877,6 +877,7 @@ def _tool_result_raw_output(
     output_dir: str | None = None,
     task_id: str | None = None,
     turn_id: str | None = None,
+    tool_call_id: str | None = None,
 ) -> Any:
     if isinstance(raw_output, dict):
         payload = dict(raw_output)
@@ -892,6 +893,9 @@ def _tool_result_raw_output(
         if turn_id:
             payload.setdefault("turn_id", turn_id)
             payload.setdefault("turnId", turn_id)
+        if tool_call_id:
+            payload.setdefault("tool_call_id", tool_call_id)
+            payload.setdefault("toolCallId", tool_call_id)
         if policy_decision is not None:
             payload["policy_decision"] = policy_decision
         return payload
@@ -1834,6 +1838,9 @@ class BoxACPAgent:
                 use_output_dir=artifact_mode != "project",
                 artifact_root_dir=output_dir,
                 create_artifact_root=artifact_mode != "project",
+                # ACP sessions may share a workspace; child agents must not
+                # infer ownership from directory-wide changes.
+                artifact_diff_detection_enabled=False,
                 skill_scratch_root_dir=(
                     workspace
                     / ".box-agent"
@@ -2351,6 +2358,7 @@ class BoxACPAgent:
                 policy_decision,
                 session_id=session_id,
                 turn_id=turn_id,
+                tool_call_id=tool_call_id,
             )
             if result.raw_output is not None or policy_decision is not None
             else None
@@ -4767,7 +4775,8 @@ class BoxACPAgent:
             memory_extractor=state.memory_extractor,
             memory_turn_id=turn_id,
             inject_queue=state.inject_queue,
-            session_id=state.upstream_session_id,
+            session_id=state.upstream_session_id or session_id,
+            task_id=task_context.task_id,
             turn_id=turn_id,
             title=state.upstream_title,
             force_plan_start=force_plan_start,
@@ -4796,6 +4805,9 @@ class BoxACPAgent:
             ),
             completion_gate=completion_gate,
             artifact_detection_enabled=state.output_dir is not None,
+            # Tool receipts/references are attributable; shared-directory
+            # diffs are not, even when a task_id is attached afterward.
+            artifact_diff_detection_enabled=False,
             artifact_root_dir=state.output_dir,
             cache_fingerprint_sink=lambda fingerprint: self._log_cache_fingerprint(
                 session_id,
@@ -5028,10 +5040,11 @@ class BoxACPAgent:
                             raw_output,
                             result_text,
                             policy_decision,
-                            session_id=state.upstream_session_id,
+                            session_id=state.upstream_session_id or session_id,
                             output_dir=state.output_dir,
                             task_id=task_context.task_id,
                             turn_id=task_context.turn_id,
+                            tool_call_id=tid,
                         )
                         await self._send(
                             session_id,
@@ -5076,7 +5089,7 @@ class BoxACPAgent:
                         artifact_meta = _artifact_envelope(
                             art,
                             state.output_dir,
-                            session_id=state.upstream_session_id,
+                            session_id=state.upstream_session_id or session_id,
                             task_id=task_context.task_id,
                             turn_id=task_context.turn_id,
                             lineage=lineage,
@@ -5283,7 +5296,7 @@ class BoxACPAgent:
                                 progress["artifact"] = _artifact_envelope(
                                     art,
                                     state.output_dir,
-                                    session_id=state.upstream_session_id,
+                                    session_id=state.upstream_session_id or session_id,
                                     task_id=task_context.task_id,
                                     turn_id=task_context.turn_id,
                                     lineage=lineage,

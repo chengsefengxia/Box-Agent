@@ -547,6 +547,7 @@ def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path, 
                         use_output_dir: bool = True,
                         artifact_root_dir: str | Path | None = None,
                         create_artifact_root: bool = True,
+                        artifact_diff_detection_enabled: bool = True,
                         skill_scratch_root_dir: str | Path | None = None,
                         env_context=None,
                         process_owner_id: str | None = None,
@@ -573,6 +574,8 @@ def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path, 
         artifact_root_dir: Optional host-supplied output root for this session.
         create_artifact_root: Create the artifact root during tool setup. Project
             sessions can defer creation until an artifact-producing tool runs.
+        artifact_diff_detection_enabled: Allow child agents to infer artifacts
+            from directory diffs. Disable this for shared project roots.
         skill_scratch_root_dir: Optional workspace-contained session-private
             scratch root.
         process_owner_id: Optional ACP session identifier used to scope and
@@ -800,6 +803,7 @@ def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path, 
                 config.agent.sub_agent_batch_synthesis_timeout_seconds
             ),
             artifact_detection_enabled=artifact_root is not None,
+            artifact_diff_detection_enabled=artifact_diff_detection_enabled,
             artifact_root_dir=str(artifact_root) if artifact_root else None,
             provider_stale_seconds=config.agent.provider_stale_seconds,
         )

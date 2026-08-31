@@ -88,6 +88,7 @@ class AgentRunOptions:
     memory_turn_id: str = ""
     inject_queue: asyncio.Queue[Any] | None = None
     session_id: str = ""
+    task_id: str = ""
     turn_id: str = ""
     title: str = ""
     force_plan_start: bool = False
@@ -100,6 +101,7 @@ class AgentRunOptions:
     no_progress_limit: int | None = None
     completion_gate: CompletionGate | None = None
     artifact_detection_enabled: bool = True
+    artifact_diff_detection_enabled: bool = True
     artifact_root_dir: str | Path | None = None
     cache_fingerprint_context: dict[str, Any] | None = None
     cache_fingerprint_sink: Callable[[dict[str, Any]], None] | None = None
@@ -1096,6 +1098,7 @@ class Agent:
             inject_queue=effective_options.inject_queue,
             thinking_enabled=self.thinking_enabled,
             session_id=effective_options.session_id,
+            task_id=effective_options.task_id,
             turn_id=effective_options.turn_id,
             title=effective_options.title,
             max_parallel_tools=self.max_parallel_tools,
@@ -1113,6 +1116,9 @@ class Agent:
             max_truncated_tool_call_retries=self.max_truncated_tool_call_retries,
             truncated_tool_call_boost_cap=self.truncated_tool_call_boost_cap,
             artifact_detection_enabled=effective_options.artifact_detection_enabled,
+            artifact_diff_detection_enabled=(
+                effective_options.artifact_diff_detection_enabled
+            ),
             artifact_root_dir=effective_options.artifact_root_dir,
             cache_fingerprint_context=effective_options.cache_fingerprint_context,
             cache_fingerprint_sink=effective_options.cache_fingerprint_sink,

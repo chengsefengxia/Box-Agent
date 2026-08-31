@@ -149,3 +149,35 @@ def test_checkpoint_update_uses_generic_contract_fields(tmp_path) -> None:
     assert first.recovered_evidence_urls == frozenset()
     assert repeated.changed is False
     assert policy.stage == "outline"
+
+
+def test_controlled_presentation_declares_finalizer_primary_artifact(tmp_path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    policy = ControlledPresentationPolicy(
+        workspace_dir=str(tmp_path),
+        artifact_root_dir=artifact_root,
+        stage="finalize",
+    )
+
+    action = policy.next_deterministic_action()
+    assert action is not None
+    declared = policy.declared_artifact_path(action.tool_name, action.arguments)
+
+    assert declared == str((artifact_root / "index.html").resolve())
+
+
+def test_controlled_presentation_declares_patch_primary_artifact(tmp_path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    policy = ControlledPresentationPolicy(
+        workspace_dir=str(tmp_path),
+        artifact_root_dir=artifact_root,
+        stage="apply_patch",
+    )
+
+    action = policy.next_deterministic_action()
+    assert action is not None
+    declared = policy.declared_artifact_path(action.tool_name, action.arguments)
+
+    assert declared == str((artifact_root / "deck.json").resolve())

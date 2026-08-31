@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,10 +42,59 @@ class ToolResult(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ToolInvocationContext:
-    """Optional runtime context hidden behind the tool invocation interface."""
+    """Authoritative runtime identity hidden from model-supplied arguments."""
 
     event_queue: asyncio.Queue | None = None
     parent_tool_call_id: str = ""
+    session_id: str = ""
+    task_id: str = ""
+    turn_id: str = ""
+    tool_call_id: str = ""
+    artifact_path: str = ""
+
+
+_CURRENT_TOOL_INVOCATION_CONTEXT: ContextVar[ToolInvocationContext | None] = (
+    ContextVar("box_agent_tool_invocation_context", default=None)
+)
+
+
+def current_tool_invocation_context() -> ToolInvocationContext | None:
+    """Return the invocation identity visible to nested runtime adapters."""
+
+    return _CURRENT_TOOL_INVOCATION_CONTEXT.get()
+
+
+def _bind_artifact_receipt_lineage(
+    result: ToolResult,
+    context: ToolInvocationContext | None,
+) -> ToolResult:
+    """Bind a structured artifact receipt to its real invocation identity."""
+
+    if context is None:
+        return result
+    if not isinstance(result.raw_output, dict) and not context.artifact_path:
+        return result
+
+    raw_output = result.raw_output if isinstance(result.raw_output, dict) else {}
+    payload = dict(raw_output)
+    if context.artifact_path and result.success:
+        payload["type"] = "artifact"
+        payload["path"] = context.artifact_path
+    if payload.get("type") != "artifact":
+        return result
+
+    for snake_key, camel_key, value in (
+        ("session_id", "sessionId", context.session_id),
+        ("task_id", "taskId", context.task_id),
+        ("turn_id", "turnId", context.turn_id),
+        ("tool_call_id", "toolCallId", context.tool_call_id),
+    ):
+        if value:
+            # Invocation identity is runtime-owned. A Tool or MCP payload must
+            # not preserve stale or conflicting caller-supplied lineage.
+            payload[snake_key] = value
+            payload[camel_key] = value
+    return result.model_copy(update={"raw_output": payload})
 
 
 class Tool:
@@ -104,7 +154,12 @@ class Tool:
             return self._invalid_schema_result()
         if issues:
             return self._invalid_arguments_result(issues)
-        return await self._invoke_validated(arguments, context=context)
+        context_token = _CURRENT_TOOL_INVOCATION_CONTEXT.set(context)
+        try:
+            result = await self._invoke_validated(arguments, context=context)
+            return _bind_artifact_receipt_lineage(result, context)
+        finally:
+            _CURRENT_TOOL_INVOCATION_CONTEXT.reset(context_token)
 
     def _invalid_schema_result(self) -> ToolResult:
         message = "tool parameter schema is invalid"

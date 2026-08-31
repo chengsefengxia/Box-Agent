@@ -89,12 +89,14 @@ async def test_agent_run_events_forwards_host_run_options(
         agent.default_run_options(),
         llm=host_llm,
         session_id="host-session",
+        task_id="task-1",
         memory_turn_id="turn-1",
         turn_id="turn-1",
         title="Quarterly review",
         max_tool_calls=9,
         web_search_total_limit=36,
         no_progress_limit=2,
+        artifact_diff_detection_enabled=False,
         artifact_root_dir=artifact_root,
         cache_fingerprint_sink=fingerprint_sink,
         workflow_policy=workflow_policy,
@@ -106,12 +108,14 @@ async def test_agent_run_events_forwards_host_run_options(
     assert len(events) == 1
     assert captured["llm"] is host_llm
     assert captured["session_id"] == "host-session"
+    assert captured["task_id"] == "task-1"
     assert captured["memory_turn_id"] == "turn-1"
     assert captured["turn_id"] == "turn-1"
     assert captured["title"] == "Quarterly review"
     assert captured["max_tool_calls"] == 9
     assert captured["web_search_total_limit"] == 36
     assert captured["no_progress_limit"] == 2
+    assert captured["artifact_diff_detection_enabled"] is False
     assert captured["artifact_root_dir"] == artifact_root
     assert captured["cache_fingerprint_sink"] is fingerprint_sink
     assert captured["workflow_policy"] is workflow_policy

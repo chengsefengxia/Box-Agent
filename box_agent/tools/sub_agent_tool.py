@@ -35,7 +35,12 @@ from ..events import (
 from ..llm.model_routing import resolve_model_client
 from ..schema import Message
 from ..session_log import SessionLog
-from .base import EventEmittingTool, Tool, ToolResult
+from .base import (
+    EventEmittingTool,
+    Tool,
+    ToolResult,
+    current_tool_invocation_context,
+)
 from .schema_validation import ToolArgumentIssue
 from .safety import detect_dangerous_command
 from .skill_preload import strip_active_skills, strip_auto_loaded_skills
@@ -263,6 +268,7 @@ class SubAgentTool(EventEmittingTool):
         no_progress_limit: int | None = None,
         batch_synthesis_timeout_seconds: float = _DEFAULT_BATCH_SYNTHESIS_TIMEOUT_SECONDS,
         artifact_detection_enabled: bool = True,
+        artifact_diff_detection_enabled: bool = True,
         artifact_root_dir: str | None = None,
         provider_stale_seconds: float | None = None,
     ):
@@ -294,6 +300,7 @@ class SubAgentTool(EventEmittingTool):
         )
         self._batch_synthesis_timeout_seconds = batch_synthesis_timeout_seconds
         self._artifact_detection_enabled = artifact_detection_enabled
+        self._artifact_diff_detection_enabled = artifact_diff_detection_enabled
         self._artifact_root_dir = artifact_root_dir
         # Inherit the parent's provider-stale cutoff so slow-model configs also
         # apply to child agents. None lets run_agent_loop resolve env/default.
@@ -763,6 +770,7 @@ class SubAgentTool(EventEmittingTool):
         step_open = False
         current_step: int | None = None
         turn_open = session_log is not None
+        invocation_context = current_tool_invocation_context()
         try:
             async for event in run_agent_loop(
                 llm=llm,
@@ -776,6 +784,9 @@ class SubAgentTool(EventEmittingTool):
                 provider_stale_seconds=self._provider_stale_seconds,
                 no_progress_limit=self._no_progress_limit,
                 artifact_detection_enabled=self._artifact_detection_enabled,
+                artifact_diff_detection_enabled=(
+                    self._artifact_diff_detection_enabled
+                ),
                 artifact_root_dir=self._artifact_root_dir,
                 permission_negotiator=self._permission_negotiator,
                 cache_fingerprint_context={
@@ -783,6 +794,9 @@ class SubAgentTool(EventEmittingTool):
                     "resolved_skills": diagnostic.get("resolved_skills", []),
                 },
                 call_kind="subagent_step",
+                session_id=(invocation_context.session_id if invocation_context else ""),
+                task_id=(invocation_context.task_id if invocation_context else ""),
+                turn_id=(invocation_context.turn_id if invocation_context else ""),
                 session_log=session_log,
                 session_turn=1 if session_log is not None else None,
             ):

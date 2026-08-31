@@ -478,6 +478,13 @@ class ExternalSkillRunPolicy:
     ) -> str | None:
         return None
 
+    def declared_artifact_path(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> str | None:
+        return None
+
     def exempts_tool_budget(self, tool_name: str) -> bool:
         return False
 

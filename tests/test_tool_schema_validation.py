@@ -195,3 +195,61 @@ async def test_event_tool_invocation_preserves_runtime_context() -> None:
 
     assert result.success is True
     assert tool.context == (queue, "call-1", "hello")
+
+
+@pytest.mark.asyncio
+async def test_artifact_receipt_uses_authoritative_invocation_lineage() -> None:
+    class ArtifactTool(RecordingTool):
+        async def execute(self, text: str, mode: str = "safe") -> ToolResult:
+            return ToolResult(
+                success=True,
+                content=text,
+                raw_output={
+                    "type": "artifact",
+                    "path": "output/report.md",
+                    "session_id": "stale-session",
+                    "task_id": "stale-task",
+                    "turn_id": "stale-turn",
+                    "tool_call_id": "stale-call",
+                },
+            )
+
+    result = await ArtifactTool().invoke(
+        {"text": "created"},
+        context=ToolInvocationContext(
+            session_id="session-1",
+            task_id="task-1",
+            turn_id="turn-1",
+            tool_call_id="call-1",
+        ),
+    )
+
+    assert result.raw_output["session_id"] == "session-1"
+    assert result.raw_output["sessionId"] == "session-1"
+    assert result.raw_output["task_id"] == "task-1"
+    assert result.raw_output["taskId"] == "task-1"
+    assert result.raw_output["turn_id"] == "turn-1"
+    assert result.raw_output["turnId"] == "turn-1"
+    assert result.raw_output["tool_call_id"] == "call-1"
+    assert result.raw_output["toolCallId"] == "call-1"
+
+
+@pytest.mark.asyncio
+async def test_declared_artifact_receives_authoritative_invocation_lineage() -> None:
+    result = await RecordingTool().invoke(
+        {"text": "created"},
+        context=ToolInvocationContext(
+            session_id="session-1",
+            task_id="task-1",
+            turn_id="turn-1",
+            tool_call_id="call-1",
+            artifact_path="output/deck.json",
+        ),
+    )
+
+    assert result.raw_output["type"] == "artifact"
+    assert result.raw_output["path"] == "output/deck.json"
+    assert result.raw_output["session_id"] == "session-1"
+    assert result.raw_output["task_id"] == "task-1"
+    assert result.raw_output["turn_id"] == "turn-1"
+    assert result.raw_output["tool_call_id"] == "call-1"

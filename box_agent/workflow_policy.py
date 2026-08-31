@@ -66,6 +66,14 @@ class WorkflowPolicy(Protocol):
         parallel: bool = False,
     ) -> str | None: ...
 
+    def declared_artifact_path(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> str | None:
+        """Return the primary output owned by this exact tool invocation."""
+        ...
+
     def record_tool_result(
         self,
         tool_name: str,
