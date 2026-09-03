@@ -7,7 +7,6 @@ import json
 import sys
 
 from box_agent.acp import runtime_entry
-from box_agent.mcp_servers import connector_proxy_server
 from box_agent.mcp_servers import web_extract_server
 from box_agent.tools import mcp_bootstrap
 
@@ -53,25 +52,5 @@ def test_runtime_entry_dispatches_web_extract_mcp(monkeypatch, tmp_path) -> None
             runtime_entry.main()
 
             assert called == [True]
-            assert sys.stdout is protocol_stdout
-            assert protocol_stdout.closed is False
-
-
-def test_runtime_entry_dispatches_connector_proxy_mcp(monkeypatch, tmp_path) -> None:
-    called: list[list[str]] = []
-    with monkeypatch.context() as context:
-        stdout_path = tmp_path / "protocol.stdout"
-        with stdout_path.open("w+", encoding="utf-8") as protocol_stdout:
-            context.setattr(
-                sys,
-                "argv",
-                ["box-agent-acp", "--connector-proxy-mcp", "--status-file", "status.json"],
-            )
-            context.setattr(sys, "stdout", protocol_stdout)
-            context.setattr(connector_proxy_server, "main", lambda argv: called.append(argv))
-
-            runtime_entry.main()
-
-            assert called == [["--status-file", "status.json"]]
             assert sys.stdout is protocol_stdout
             assert protocol_stdout.closed is False

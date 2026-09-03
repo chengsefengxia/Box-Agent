@@ -3387,11 +3387,93 @@ class BoxACPAgent:
             except WorkspaceRegistryError as exc:
                 return {"error": str(exc)}
         if method == "mcp/status":
-            from box_agent.tools.mcp_loader import get_mcp_status, is_mcp_loading, get_mcp_config_path
+            from box_agent.tools.mcp_loader import (
+                get_mcp_config_path,
+                get_mcp_config_paths,
+                get_mcp_status,
+                is_mcp_loading,
+            )
             servers = get_mcp_status()
             loading = is_mcp_loading()
             log.info("mcp/status", count=len(servers), loading=loading)
-            return {"servers": servers, "loading": loading, "configPath": get_mcp_config_path()}
+            return {
+                "servers": servers,
+                "loading": loading,
+                "configPath": get_mcp_config_path(),
+                "configPaths": get_mcp_config_paths(),
+            }
+        if method == "mcp/credential/set":
+            credential_ref = params.get("credentialRef", "")
+            headers = params.get("headers", {})
+            if not isinstance(credential_ref, str) or not isinstance(headers, dict):
+                return {"success": False, "error": "credentialRef and headers are required"}
+            from box_agent.tools.mcp_loader import set_mcp_runtime_credential
+            try:
+                affected = set_mcp_runtime_credential(credential_ref, headers)
+            except ValueError as error:
+                return {"success": False, "error": str(error)}
+            log.info("mcp/credential/set", affected_servers=len(affected))
+            return {"success": True, "affectedServers": affected}
+        if method == "mcp/credential/clear":
+            credential_ref = params.get("credentialRef", "")
+            if not isinstance(credential_ref, str) or not credential_ref.strip():
+                return {"success": False, "error": "credentialRef is required"}
+            from box_agent.tools.mcp_loader import clear_mcp_runtime_credential
+            affected = clear_mcp_runtime_credential(credential_ref)
+            log.info("mcp/credential/clear", affected_servers=len(affected))
+            return {"success": True, "affectedServers": affected}
+        if method == "mcp/reconcile":
+            source = params.get("source")
+            if source is not None and not isinstance(source, str):
+                return {"success": False, "error": "source must be a string"}
+            from box_agent.tools.mcp_loader import (
+                get_all_mcp_tools,
+                get_mcp_tools_for_server,
+                reconcile_mcp_sources,
+            )
+            result = await reconcile_mcp_sources(source)
+            if not self._config.tools.mcp.deferred_loading_enabled:
+                all_mcp_tools = get_all_mcp_tools()
+                sync_mcp_tool_list(
+                    self._base_tools,
+                    all_mcp_tools,
+                    self._base_mcp_fallback_tools,
+                )
+                for session_state in self._sessions.values():
+                    sync_mcp_tools(
+                        session_state.agent.tools,
+                        all_mcp_tools,
+                        session_state.mcp_fallback_tools,
+                    )
+            injected = 0
+            for item in result.get("results", []):
+                name = item.get("name", "")
+                if not name:
+                    continue
+                tools = get_mcp_tools_for_server(name)
+                action = item.get("action")
+                if action in {"removed", "disabled"}:
+                    state = "disconnected"
+                elif item.get("success"):
+                    state = "connected"
+                else:
+                    state = "failed"
+                injected += self._inject_mcp_runtime_update(
+                    name=name,
+                    state=state,
+                    tool_count=len(tools),
+                    always_load_count=sum(
+                        bool(getattr(tool, "mcp_always_load", False)) for tool in tools
+                    ),
+                )
+            log.info(
+                "mcp/reconcile",
+                source=source,
+                success=result.get("success"),
+                changed=len(result.get("results", [])),
+                context_injected_sessions=injected,
+            )
+            return result
         if method == "mcp/reconnect":
             name = params.get("name", "")
             if not name:

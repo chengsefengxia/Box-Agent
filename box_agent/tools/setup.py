@@ -430,7 +430,20 @@ async def initialize_base_tools(
             else Path.home() / ".box-agent" / "config" / "mcp.json"
         )
         if host_mcp_config:
-            mcp_config_path = bootstrap_target if bootstrap_target.exists() else None
+            isolated_source_paths = [
+                Path(value).expanduser()
+                for value in (
+                    os.environ.get("BOX_AGENT_USER_MCP_CONFIG_PATH", "").strip(),
+                    os.environ.get("BOX_AGENT_SYSTEM_MCP_CONFIG_PATH", "").strip(),
+                    os.environ.get("BOX_AGENT_CONNECTOR_MCP_CONFIG_PATH", "").strip(),
+                )
+                if value
+            ]
+            mcp_config_path = (
+                bootstrap_target
+                if bootstrap_target.exists() or any(path.exists() for path in isolated_source_paths)
+                else None
+            )
         else:
             bootstrap = bootstrap_managed_mcp_config(bootstrap_target)
             if bootstrap.warning:

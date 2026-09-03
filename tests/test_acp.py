@@ -1994,6 +1994,60 @@ async def test_mcp_reconnect_injects_hidden_deferred_state_into_active_turns_onl
 
 
 @pytest.mark.asyncio
+async def test_mcp_credential_set_keeps_secret_out_of_result(tmp_path, monkeypatch):
+    config = Config(
+        llm=LLMConfig(api_key="test-key"),
+        agent=AgentConfig(workspace_dir=str(tmp_path)),
+        tools=ToolsConfig(enable_sub_agent=False),
+    )
+    agent = BoxACPAgent(DummyConn(), config, DummyLLM(), [], "system")
+    captured = {}
+
+    def set_credential(credential_ref, headers):
+        captured.update({"credentialRef": credential_ref, "headers": headers})
+        return ["law"]
+
+    monkeypatch.setattr(
+        "box_agent.tools.mcp_loader.set_mcp_runtime_credential",
+        set_credential,
+    )
+
+    result = await agent.extMethod(
+        "mcp/credential/set",
+        {
+            "credentialRef": "connector:pkulaw:default",
+            "headers": {"Authorization": "Bearer secret"},
+        },
+    )
+
+    assert captured["headers"]["Authorization"] == "Bearer secret"
+    assert result == {"success": True, "affectedServers": ["law"]}
+    assert "secret" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_mcp_reconcile_delegates_source_diff_to_loader(tmp_path, monkeypatch):
+    config = Config(
+        llm=LLMConfig(api_key="test-key"),
+        agent=AgentConfig(workspace_dir=str(tmp_path)),
+        tools=ToolsConfig(enable_sub_agent=False),
+    )
+    agent = BoxACPAgent(DummyConn(), config, DummyLLM(), [], "system")
+
+    async def reconcile(source):
+        return {"success": True, "source": source, "results": []}
+
+    monkeypatch.setattr(
+        "box_agent.tools.mcp_loader.reconcile_mcp_sources",
+        reconcile,
+    )
+
+    result = await agent.extMethod("mcp/reconcile", {"source": "connector"})
+
+    assert result == {"success": True, "source": "connector", "results": []}
+
+
+@pytest.mark.asyncio
 async def test_acp_auth_refresh_reconnects_and_injects_deferred_catalog_update(
     tmp_path,
     monkeypatch,
