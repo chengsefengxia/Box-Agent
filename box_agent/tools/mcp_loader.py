@@ -1156,7 +1156,24 @@ def _build_connection(definition: ResolvedMcpServer) -> "MCPServerConnection":
 def _resolve_registered_sources(config_path: str) -> dict[str, ResolvedMcpServer]:
     global _mcp_sources
     _mcp_sources = configured_mcp_sources(config_path)
-    resolved = resolve_mcp_sources(_mcp_sources, _mcp_runtime_credential_versions)
+    raw_reserved_names = os.environ.get("BOX_AGENT_RESERVED_MCP_SERVER_NAMES", "")
+    reserved_names: set[str] = set()
+    if raw_reserved_names:
+        try:
+            parsed_reserved_names = json.loads(raw_reserved_names)
+            if isinstance(parsed_reserved_names, list):
+                reserved_names = {
+                    name.strip()
+                    for name in parsed_reserved_names
+                    if isinstance(name, str) and name.strip()
+                }
+        except json.JSONDecodeError:
+            _warn("Ignoring invalid BOX_AGENT_RESERVED_MCP_SERVER_NAMES JSON")
+    resolved = resolve_mcp_sources(
+        _mcp_sources,
+        _mcp_runtime_credential_versions,
+        reserved_names,
+    )
     for conflict in resolved.conflicts:
         _warn(f"Skipping conflicting MCP server: {conflict}")
     return resolved.servers

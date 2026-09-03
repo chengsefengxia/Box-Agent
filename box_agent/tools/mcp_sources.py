@@ -113,14 +113,19 @@ def _fingerprint(
 def resolve_mcp_sources(
     sources: tuple[McpConfigSource, ...],
     credential_versions: dict[str, int] | None = None,
+    reserved_names: set[str] | None = None,
 ) -> ResolvedMcpSources:
     """Resolve sources without allowing lower-trust entries to shadow protected ones."""
 
     credential_versions = credential_versions or {}
+    reserved_names = reserved_names or set()
     resolved: dict[str, ResolvedMcpServer] = {}
     conflicts: list[str] = []
     for source in sources:
         for name, config in _read_servers(source).items():
+            if source.owner == "user" and name in reserved_names:
+                conflicts.append(f"user:{name} uses a protected server name")
+                continue
             if name in resolved:
                 conflicts.append(
                     f"{source.owner}:{name} conflicts with {resolved[name].owner}:{name}"

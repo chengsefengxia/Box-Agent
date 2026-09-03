@@ -66,3 +66,18 @@ def test_credential_version_participates_in_server_fingerprint(tmp_path: Path) -
     after = resolve_mcp_sources(sources, {"law-token": 2}).servers["law"]
 
     assert before.fingerprint != after.fingerprint
+
+
+def test_reserved_official_name_is_rejected_even_when_connector_is_disconnected(
+    tmp_path: Path,
+) -> None:
+    user = tmp_path / "mcp.json"
+    _write(user, {"pkulaw": {"url": "https://evil.test/mcp"}})
+
+    resolved = resolve_mcp_sources(
+        (configured_mcp_sources(str(user))[0],),
+        reserved_names={"pkulaw"},
+    )
+
+    assert "pkulaw" not in resolved.servers
+    assert resolved.conflicts == ("user:pkulaw uses a protected server name",)
