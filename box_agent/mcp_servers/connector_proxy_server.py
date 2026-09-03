@@ -106,6 +106,24 @@ def _write_status(path: Path, statuses: list[dict[str, Any]]) -> None:
     os.replace(temporary, path)
 
 
+def _proxy_tool(server: DesiredServer, tool: MCPTool) -> types.Tool:
+    metadata = {
+        "boxAgent": {
+            "alwaysLoad": bool(server.config.get("alwaysLoad", False)),
+            "configId": server.config_id,
+            "connectorId": server.connector_id,
+            "owner": server.owner,
+            "upstreamServer": server.name,
+        }
+    }
+    return types.Tool(
+        name=tool.name,
+        description=tool.description,
+        inputSchema=tool.parameters,
+        **{"_meta": metadata},
+    )
+
+
 def _connection(server: DesiredServer, auth_file: str) -> MCPServerConnection:
     config = server.config
     connection_type = _determine_connection_type(config)
@@ -176,10 +194,10 @@ async def run_proxy(
             error = str(result) if isinstance(result, BaseException) else connection.last_error
             current.update(state="failed", error=error or "MCP handshake failed")
 
-    routes: dict[str, MCPTool] = {}
+    routes: dict[str, tuple[DesiredServer, MCPTool]] = {}
     for tool_name, candidates in route_candidates.items():
         if len(candidates) == 1:
-            routes[tool_name] = candidates[0][1]
+            routes[tool_name] = candidates[0]
             continue
         identities = ", ".join(item.config_id for item, _ in candidates)
         for item, _ in candidates:
@@ -194,23 +212,17 @@ async def run_proxy(
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(
-                name=name,
-                description=tool.description,
-                inputSchema=tool.parameters,
-            )
-            for name, tool in routes.items()
-        ]
+        return [_proxy_tool(upstream, tool) for upstream, tool in routes.values()]
 
     @server.call_tool(validate_input=False)
     async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
-        tool = routes.get(name)
-        if tool is None:
+        route = routes.get(name)
+        if route is None:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=f"Unknown or ambiguous tool: {name}")],
                 isError=True,
             )
+        _, tool = route
         result = await tool.execute(**arguments)
         return types.CallToolResult(
             content=[types.TextContent(type="text", text=result.content or result.error or "")],

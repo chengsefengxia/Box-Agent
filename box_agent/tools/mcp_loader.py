@@ -100,6 +100,20 @@ def _public_mcp_tool_name(server_name: str, remote_name: str) -> str:
     return f"{safe_stem}__{digest}"
 
 
+def _mcp_tool_always_load(server_name: str, tool: Any, server_default: bool) -> bool:
+    """Preserve a proxied upstream tool's explicit deferred-loading policy."""
+    if server_name != "connector-proxy":
+        return server_default
+    metadata = getattr(tool, "meta", None)
+    if not isinstance(metadata, dict):
+        return server_default
+    box_agent_metadata = metadata.get("boxAgent")
+    if not isinstance(box_agent_metadata, dict):
+        return server_default
+    always_load = box_agent_metadata.get("alwaysLoad")
+    return always_load if isinstance(always_load, bool) else server_default
+
+
 def _replace_server_catalog(connection: "MCPServerConnection") -> None:
     catalog = get_mcp_tool_catalog()
     catalog.replace_server(connection.name, connection.tools)
@@ -668,7 +682,7 @@ class MCPServerConnection:
                     server_name=self.name,
                     fixed_arguments=fixed_arguments,
                     execute_timeout=execute_timeout,
-                    always_load=self.always_load,
+                    always_load=_mcp_tool_always_load(self.name, tool, self.always_load),
                     concurrency_limiter=self._concurrency_limiter_for_tool(tool.name),
                 )
                 self.tools.append(mcp_tool)

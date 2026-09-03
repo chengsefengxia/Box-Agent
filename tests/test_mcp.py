@@ -26,6 +26,7 @@ from box_agent.tools.mcp_loader import (
     MCPTimeoutConfig,
     WEB_SEARCH_MCP_MAX_CONCURRENCY,
     _determine_connection_type,
+    _mcp_tool_always_load,
     _public_mcp_tool_name,
     cleanup_mcp_connections,
     get_mcp_timeout_config,
@@ -73,6 +74,15 @@ def test_public_mcp_tool_name_avoids_sanitized_name_collisions():
     slashed = _public_mcp_tool_name("pkulaw", "law/search")
 
     assert dotted != slashed
+
+
+def test_connector_proxy_preserves_tool_level_always_load_policy():
+    deferred = SimpleNamespace(meta={"boxAgent": {"alwaysLoad": False}})
+    eager = SimpleNamespace(meta={"boxAgent": {"alwaysLoad": True}})
+
+    assert _mcp_tool_always_load("connector-proxy", deferred, True) is False
+    assert _mcp_tool_always_load("connector-proxy", eager, False) is True
+    assert _mcp_tool_always_load("ordinary-server", deferred, True) is True
 
 
 @pytest.mark.asyncio

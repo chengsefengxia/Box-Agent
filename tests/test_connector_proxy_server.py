@@ -1,7 +1,12 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from box_agent.mcp_servers.connector_proxy_server import build_desired_servers, parse_args
+from box_agent.mcp_servers.connector_proxy_server import (
+    _proxy_tool,
+    build_desired_servers,
+    parse_args,
+)
 
 
 def _write(path: Path, servers: dict) -> None:
@@ -36,3 +41,28 @@ def test_parse_args_defaults_auth_file_next_to_status(tmp_path: Path) -> None:
         ]
     )
     assert args.auth_file == tmp_path / "auth.json"
+
+
+def test_proxy_tool_preserves_upstream_deferred_loading_policy(tmp_path: Path) -> None:
+    system = tmp_path / "system.json"
+    connector = tmp_path / "connector.json"
+    user = tmp_path / "user.json"
+    _write(system, {})
+    _write(connector, {"law": {"url": "https://example.test", "alwaysLoad": False}})
+    _write(user, {})
+    upstream = build_desired_servers(system, connector, user)[0]
+
+    exposed = _proxy_tool(
+        upstream,
+        SimpleNamespace(name="mcp__law__search", description="Search", parameters={}),
+    )
+
+    assert exposed.meta == {
+        "boxAgent": {
+            "alwaysLoad": False,
+            "configId": "connector:law",
+            "connectorId": "law",
+            "owner": "connector",
+            "upstreamServer": "law",
+        }
+    }
