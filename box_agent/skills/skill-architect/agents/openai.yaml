@@ -1,4 +1,0 @@
-interface:
-  display_name: "Skill Architect"
-  short_description: "Design skill architecture and creation blueprints"
-  default_prompt: "Use this skill to decide whether a new capability should be a single skill, skill suite, expert, expert team, or hybrid pipeline, then produce a structured creation blueprint when appropriate."

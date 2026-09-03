@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Debug"
-  short_description: "Find root cause before fixing bugs"
-  default_prompt: "Use this skill to trace a failure from evidence to root cause before implementing a fix."
-

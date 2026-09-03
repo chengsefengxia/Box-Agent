@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Plan"
-  short_description: "Write file-level implementation plans"
-  default_prompt: "Use this skill to turn known requirements into a narrow, verifiable implementation plan."
-

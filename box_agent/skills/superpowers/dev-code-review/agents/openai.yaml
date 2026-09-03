@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Code Review"
-  short_description: "Review changes for bugs and regressions"
-  default_prompt: "Use this skill to review code changes with findings first, ordered by severity."
-

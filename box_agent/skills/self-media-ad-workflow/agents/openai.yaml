@@ -1,4 +1,0 @@
-interface:
-  display_name: "自媒体接广制作与复盘向导"
-  short_description: "带新人博主一步步完成接广内容制作、交付检查和发布后复盘"
-  default_prompt: "使用 $self-media-ad-workflow 带我新建一个接广项目。"

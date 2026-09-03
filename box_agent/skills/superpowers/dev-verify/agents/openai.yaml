@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Verify"
-  short_description: "Verify before claiming completion"
-  default_prompt: "Use this skill to choose and run fresh verification before reporting success."
-

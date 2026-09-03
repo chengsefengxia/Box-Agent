@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Branch Isolation"
-  short_description: "Prepare safe branches or worktrees"
-  default_prompt: "Use this skill to isolate development work from unrelated changes before implementation."
-

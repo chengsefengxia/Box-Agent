@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Spec"
-  short_description: "Clarify software requirements before implementation"
-  default_prompt: "Use this skill to turn a rough development request into a concise spec with goals, constraints, non-goals, and acceptance criteria."
-

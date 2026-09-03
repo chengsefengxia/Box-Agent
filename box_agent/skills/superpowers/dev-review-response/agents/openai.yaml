@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Review Response"
-  short_description: "Address review feedback safely"
-  default_prompt: "Use this skill to verify, implement, or push back on code review feedback with focused checks."
-

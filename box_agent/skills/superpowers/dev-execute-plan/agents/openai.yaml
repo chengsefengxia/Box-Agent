@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Execute Plan"
-  short_description: "Implement approved plans step by step"
-  default_prompt: "Use this skill to execute an implementation plan carefully, verifying each meaningful step."
-

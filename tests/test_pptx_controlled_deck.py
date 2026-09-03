@@ -1218,9 +1218,6 @@ def test_soft_editorial_replaces_repeated_rules_with_pastel_panels() -> None:
 
 def test_theme_gallery_is_opt_in_and_precedes_deck_checkpoint() -> None:
     skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    theme_factory = (
-        SKILL_DIR.parents[1] / "theme-factory" / "SKILL.md"
-    ).read_text(encoding="utf-8")
     editor = (SKILL_DIR / "runtime" / "deck-editor.js").read_text(encoding="utf-8")
 
     assert "Theme preview intent (before deck authoring)" in skill
@@ -1231,9 +1228,6 @@ def test_theme_gallery_is_opt_in_and_precedes_deck_checkpoint() -> None:
     assert "Composition comparison intent" in skill
     assert "scripts/render_composition_gallery.js" in skill
     assert "layout.render(modelSlide, index, documentModel.design)" in editor
-    assert "PPT ownership boundary (mandatory)" in theme_factory
-    assert 'get_skill(skill_name="pptx")' in theme_factory
-    assert "Do not list the ten themes below" in theme_factory
 
 
 def test_design_seed_is_reproducible_and_selects_distinct_variants(

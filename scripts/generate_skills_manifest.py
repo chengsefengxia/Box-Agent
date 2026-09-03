@@ -10,8 +10,8 @@ Run before each release:
     python scripts/generate_skills_manifest.py
 
 The script writes ``box_agent/skills/_manifest.json`` and then it must be
-committed to git so that the file ships inside the wheel (covered by
-``recursive-include box_agent/skills *`` in MANIFEST.in).
+committed with matching explicit package-data entries so only declared
+built-ins ship inside the wheel/runtime.
 """
 
 from __future__ import annotations
@@ -29,12 +29,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "box_agent" / "skills"
 MANIFEST_PATH = SKILLS_DIR / "_manifest.json"
 
-# Only host contracts and core Office workflows belong in the builtin catalog.
-# Every other SKILL.md may remain in the wheel/runtime during the marketplace
-# migration, but is intentionally omitted from _manifest.json and therefore
-# invisible to ordinary sessions. Marketplace installation copies those skills
-# into ~/.box-agent/skills/, where the user source is discovered independently
-# of this builtin whitelist.
+# Only host contracts and core Office workflows belong in this source tree.
+# Marketplace packages are downloaded by the host into ~/.box-agent/skills/
+# and must not be copied into the Box-Agent wheel/runtime as hidden orphans.
 BUILTIN_SKILL_NAMES: frozenset[str] = frozenset(
     {
         "browser-use",
@@ -141,15 +138,15 @@ def _collect_skills() -> List[Tuple[str, str]]:
             + ", ".join(sorted(missing))
         )
 
+    unexpected = seen.keys() - BUILTIN_SKILL_NAMES
+    if unexpected:
+        raise SystemExit(
+            "error: marketplace/non-builtin skills must not live under "
+            "box_agent/skills: " + ", ".join(sorted(unexpected))
+        )
+
     entries: List[Tuple[str, str]] = []
     for name, rel in discovered:
-        if name not in BUILTIN_SKILL_NAMES:
-            print(
-                f"info: excluding '{rel}' from builtin manifest "
-                f"(marketplace skill source)",
-                file=sys.stderr,
-            )
-            continue
         entries.append((name, rel))
 
     return entries

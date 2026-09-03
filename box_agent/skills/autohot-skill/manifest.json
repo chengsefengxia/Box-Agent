@@ -1,6 +1,0 @@
-{
-  "name": "autohot-skill",
-  "description": "汽车行业每日情报 Skill：基于 AutoHOT 公开接口查询汽车热点、日报、品牌动态、赛道趋势，并生成销售晨会简报、管理层周报和事件影响分析。",
-  "version": "1.0.0",
-  "source_type": "local"
-}

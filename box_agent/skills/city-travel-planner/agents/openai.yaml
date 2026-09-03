@@ -1,4 +1,0 @@
-interface:
-  display_name: "城市旅行攻略规划师"
-  short_description: "按天数、交通、预算与偏好生成可执行的城市旅行攻略与每日路线"
-  default_prompt: "Use $city-travel-planner 为我规划恩施五日游，包含每日动线、交通时间、住宿区域和天气备选。"

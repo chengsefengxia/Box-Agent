@@ -1,6 +1,0 @@
-{
-  "name": "viral-title",
-  "description": "Generate high-potential viral title candidates for content across WeChat public account articles, X/Twitter posts, YouTube videos, Bilibili videos, and similar content platforms. Use when the user needs headline/title ideation, batch title generation, platform-specific title adaptation, title-library reuse, title selection, title scoring, or a reusable title workflow based on universal formulas plus separated platform methods such as 公众号, X, YouTube, and B站.",
-  "version": "1.0.0",
-  "source_type": "local"
-}

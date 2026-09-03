@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev Finish"
-  short_description: "Finish verified development work"
-  default_prompt: "Use this skill to summarize verified changes and safely prepare commits or PRs when requested."
-

@@ -1,5 +1,0 @@
-interface:
-  display_name: "Dev TDD"
-  short_description: "Use red-green-refactor for code changes"
-  default_prompt: "Use this skill to write a failing test first, implement the minimal fix, and verify the behavior stays green."
-

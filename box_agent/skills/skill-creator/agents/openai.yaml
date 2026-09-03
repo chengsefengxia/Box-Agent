@@ -1,4 +1,0 @@
-interface:
-  display_name: "Skill Creator"
-  short_description: "Create and refine Codex skills"
-  default_prompt: "Use this skill to design, write, and iterate on new Codex skills with concise triggering, clear workflows, and minimal bundled context."

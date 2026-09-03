@@ -1,4 +1,0 @@
-interface:
-  display_name: "Research to Deck Outline"
-  short_description: "Turn research into expandable PPT outlines"
-  default_prompt: "Use $research-to-deck-outline to turn this research into a guided PPT outline."
