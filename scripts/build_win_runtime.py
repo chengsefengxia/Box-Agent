@@ -156,6 +156,8 @@ def _windows_pyinstaller_collect_args() -> list[str]:
 
 def _run_pyinstaller(bin_dir: Path) -> None:
     """Run PyInstaller and copy the output into ``bin_dir``."""
+    from scripts import build_runtime
+
     work_dir = bin_dir.parent.parent / "pyinstaller_work"
     dist_dir = bin_dir.parent.parent / "pyinstaller_out"
     spec_dir = bin_dir.parent.parent
@@ -168,7 +170,17 @@ def _run_pyinstaller(bin_dir: Path) -> None:
 
     datas = [
         (str(PROJECT_ROOT / "box_agent" / "config"), "box_agent/config"),
-        (str(PROJECT_ROOT / "box_agent" / "skills"), "box_agent/skills"),
+        (
+            str(
+                PROJECT_ROOT
+                / "box_agent"
+                / "resources"
+                / "fonts"
+                / "NotoSansSC-Regular.otf"
+            ),
+            "box_agent/resources/fonts",
+        ),
+        *build_runtime.pyinstaller_builtin_skill_data_entries(PROJECT_ROOT),
     ]
     datas_args: list[str] = []
     for src, dst in datas:

@@ -290,6 +290,43 @@ def pyinstaller_exclude_args(*, external_python_sandbox: bool = False) -> list[s
     return args
 
 
+def pyinstaller_builtin_skill_data_entries(
+    project_root: Path = PROJECT_ROOT,
+) -> list[tuple[str, str]]:
+    """Return only manifest-declared builtin Skill data for PyInstaller."""
+    skills_dir = (project_root / "box_agent" / "skills").resolve()
+    manifest_path = skills_dir / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    entries: list[tuple[str, str]] = []
+    for filename in (
+        "_manifest.json",
+        "README.md",
+        "THIRD_PARTY_NOTICES.md",
+        "agent_skills_spec.md",
+    ):
+        source = skills_dir / filename
+        if source.is_file():
+            entries.append((str(source), "box_agent/skills"))
+
+    seen: set[Path] = set()
+    for item in manifest.get("skills", []):
+        relative_skill_path = Path(str(item.get("path") or ""))
+        skill_file = (skills_dir / relative_skill_path).resolve()
+        if skills_dir not in skill_file.parents or skill_file.name != "SKILL.md":
+            raise RuntimeError(f"Invalid builtin Skill path: {relative_skill_path}")
+        if not skill_file.is_file():
+            raise RuntimeError(f"Missing builtin Skill path: {relative_skill_path}")
+        source_dir = skill_file.parent
+        if source_dir in seen:
+            continue
+        seen.add(source_dir)
+        destination = Path("box_agent/skills") / source_dir.relative_to(skills_dir)
+        entries.append((str(source_dir), destination.as_posix()))
+
+    return entries
+
+
 def detect_platform() -> tuple[str, str]:
     """Return the running Python process platform in Electron naming convention."""
     system = platform.system().lower()
@@ -421,6 +458,8 @@ def build_runtime_manifest(
         "entry": entry_path,
         "mode": "standalone",
         "managed_mcp_config_version": MANAGED_MCP_CONFIG_VERSION,
+        "connector_skill_sources_version": 1,
+        "connector_mcp_proxy_version": 1,
         "external_python_sandbox": external_python_sandbox,
         "bundled_stable_runtimes": list(bundled_components),
         "mcp_servers": {
@@ -553,10 +592,15 @@ def build_runtime(
 
     entry_point = project_root / "box_agent" / "acp" / "runtime_entry.py"
 
-    # Collect data files: config/, skills/
+    # Collect config plus manifest-declared builtin Skills only. Marketplace
+    # packages are installed by the host into ~/.box-agent/skills/.
     datas = [
         (str(project_root / "box_agent" / "config"), "box_agent/config"),
-        (str(project_root / "box_agent" / "skills"), "box_agent/skills"),
+        (
+            str(project_root / "box_agent" / "resources" / "fonts" / "NotoSansSC-Regular.otf"),
+            "box_agent/resources/fonts",
+        ),
+        *pyinstaller_builtin_skill_data_entries(project_root),
     ]
     datas_args = []
     for src, dst in datas:

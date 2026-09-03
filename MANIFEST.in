@@ -1,9 +1,19 @@
-recursive-include box_agent/skills *
+recursive-include box_agent/skills/browser-use *
+recursive-include box_agent/skills/data-dashboard *
+recursive-include box_agent/skills/document-skills *
+recursive-include box_agent/skills/html-templates *
+recursive-include box_agent/skills/mcp-config *
+recursive-include box_agent/skills/memory-guide *
+recursive-include box_agent/skills/research-synthesis *
+recursive-include box_agent/skills/roadmap *
+recursive-include box_agent/skills/scheduled-task *
+include box_agent/skills/_manifest.json
 global-exclude *.pyc *.pyo
 global-exclude .DS_Store
 include box_agent/skills/README.md
 include box_agent/skills/THIRD_PARTY_NOTICES.md
 include box_agent/skills/agent_skills_spec.md
+include box_agent/resources/fonts/NotoSansSC-Regular.otf
 
 recursive-include box_agent/config *
 include box_agent/config/config-example.yaml

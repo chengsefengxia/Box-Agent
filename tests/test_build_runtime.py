@@ -12,6 +12,34 @@ from scripts import build_runtime
 from scripts.build_runtime import _relativize_node_manifest
 
 
+def test_pyinstaller_skill_data_contains_only_manifest_builtins() -> None:
+    entries = build_runtime.pyinstaller_builtin_skill_data_entries()
+    sources = {Path(source).as_posix() for source, _destination in entries}
+    destinations = {destination for _source, destination in entries}
+
+    assert any(source.endswith("/box_agent/skills/_manifest.json") for source in sources)
+    assert "box_agent/skills/browser-use" in destinations
+    assert "box_agent/skills/document-skills/pptx" in destinations
+    assert all(not source.endswith("/box_agent/skills") for source in sources)
+    assert all("midu" not in source and "zhihu" not in source for source in sources)
+
+
+def test_python_packages_cannot_fall_back_to_bundling_all_skills() -> None:
+    pyproject = (build_runtime.PROJECT_ROOT / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    manifest_lines = (
+        build_runtime.PROJECT_ROOT / "MANIFEST.in"
+    ).read_text(encoding="utf-8").splitlines()
+
+    assert '"skills/**/*"' not in pyproject
+    assert "recursive-include box_agent/skills *" not in manifest_lines
+    assert '"skills/browser-use/**/*"' in pyproject
+    assert '"skills/document-skills/**/*"' in pyproject
+    assert '"resources/fonts/NotoSansSC-Regular.otf"' in pyproject
+    assert "include box_agent/resources/fonts/NotoSansSC-Regular.otf" in manifest_lines
+
+
 def test_linux_runtime_pins_openai_to_utf8_header_compatible_version() -> None:
     project = (build_runtime.PROJECT_ROOT / "pyproject.toml").read_text()
     dockerfile = (
@@ -124,6 +152,8 @@ def test_runtime_manifest_advertises_bundled_web_extract_mcp() -> None:
 
     assert manifest["entry"] == "bin/box-agent-acp"
     assert manifest["managed_mcp_config_version"] == 1
+    assert manifest["connector_skill_sources_version"] == 1
+    assert manifest["connector_mcp_proxy_version"] == 1
     assert manifest["mcp_servers"] == {
         "box-agent-web-extract": {
             "entry": "bin/box-agent-acp",

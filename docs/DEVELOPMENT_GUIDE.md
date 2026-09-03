@@ -331,9 +331,9 @@ The current manifest lists only 12 core built-in skills:
 - **Internal dependency**: `html-templates`
 
 `BUILTIN_SKILL_NAMES` in `scripts/generate_skills_manifest.py` is the explicit
-allowlist. Other repository skills may remain physically present in the
-wheel/runtime during the marketplace migration, but they are omitted from
-`_manifest.json` and are not visible to ordinary sessions as built-ins.
+allowlist. `box_agent/skills/` may only contain those built-ins; the manifest
+generator rejects extra Skill entry points, and runtime builders package only
+manifest-declared directories.
 
 Before release, regenerate and commit the manifest if built-in skills change:
 
@@ -346,27 +346,13 @@ uv run python scripts/generate_skills_manifest.py
 New professional, third-party, and community skills are marketplace skills by
 default and must not be added to the built-in allowlist:
 
-1. Put the skill directory under `box_agent/skills/<skill-slug>/`. Keep
-   `SKILL.md` frontmatter complete, including `name`, `description`, and
-   `author` when the card should show attribution.
-2. Do not add the skill name to `BUILTIN_SKILL_NAMES` in
-   `scripts/generate_skills_manifest.py`. Only direct host runtime contracts
-   and core Office workflows belong in that allowlist.
-3. Regenerate the manifest:
-
-   ```bash
-   uv run python scripts/generate_skills_manifest.py
-   ```
-
-   Verify the script logs `info: excluding '<skill-slug>/SKILL.md'` and that
-   `box_agent/skills/_manifest.json` does not list the skill.
-4. Publish and install the package through the Skill marketplace. Installed
-   skills live under `~/.box-agent/skills/` and are discovered as user skills.
-
-During migration, directories required by existing recommended/expert install
-flows remain physically bundled in the runtime. Manifest exclusion controls
-built-in discovery only; it does not mean the marketplace package has already
-been removed from the ACP artifact.
+1. Keep the marketplace package outside `box_agent/skills/`; this repository
+   does not act as the marketplace package store.
+2. Publish the package through SkillHub with complete `SKILL.md` frontmatter.
+3. Install through the host SkillHub flow. Installed skills live under
+   `~/.box-agent/skills/` and are discovered as user skills.
+4. Add a Skill to `BUILTIN_SKILL_NAMES` only when it is a direct host runtime
+   contract or core Office workflow that must ship in every runtime.
 
 #### Conversational Skill marketplace installation
 

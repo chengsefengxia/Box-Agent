@@ -86,10 +86,27 @@ include-package-data = true
 include = ["box_agent*"]
 exclude = ["tests*"]
 
-# Include skills directory (git submodule) as package data
-# After moving submodule to box_agent/skills
+# Package only manifest-owned builtin Skills. SkillHub packages are host-downloaded
+# into ~/.box-agent/skills and must not be hidden inside the wheel/runtime.
 [tool.setuptools.package-data]
-box_agent = ["skills/**/*", "config/*", "trace_viewer/*"]
+box_agent = [
+    "skills/_manifest.json",
+    "skills/README.md",
+    "skills/THIRD_PARTY_NOTICES.md",
+    "skills/agent_skills_spec.md",
+    "skills/browser-use/**/*",
+    "skills/data-dashboard/**/*",
+    "skills/document-skills/**/*",
+    "skills/html-templates/**/*",
+    "skills/mcp-config/**/*",
+    "skills/memory-guide/**/*",
+    "skills/research-synthesis/**/*",
+    "skills/roadmap/**/*",
+    "skills/scheduled-task/**/*",
+    "resources/fonts/NotoSansSC-Regular.otf",
+    "config/*",
+    "trace_viewer/*",
+]
 
 [tool.setuptools.exclude-package-data]
 box_agent = [

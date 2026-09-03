@@ -50,6 +50,18 @@ def test_windows_pyinstaller_command_includes_web_extract_server(
     ) in hidden_pairs
     assert (bin_dir / "box-agent-acp.exe").is_file()
 
+    add_data_values = [
+        captured[index + 1]
+        for index, value in enumerate(captured[:-1])
+        if value == "--add-data"
+    ]
+    assert any("box_agent/skills/browser-use" in value for value in add_data_values)
+    assert not any(
+        value.split(build_win_runtime.os.pathsep, 1)[0].endswith("box_agent\\skills")
+        or value.split(build_win_runtime.os.pathsep, 1)[0].endswith("box_agent/skills")
+        for value in add_data_values
+    )
+
 
 def test_windows_manifest_advertises_bundled_web_extract_mcp(
     tmp_path: Path,
@@ -66,6 +78,8 @@ def test_windows_manifest_advertises_bundled_web_extract_mcp(
     assert manifest["arch"] == "x64"
     assert manifest["entry"] == "bin/box-agent-acp.exe"
     assert manifest["managed_mcp_config_version"] == 1
+    assert manifest["connector_skill_sources_version"] == 1
+    assert manifest["connector_mcp_proxy_version"] == 1
     assert manifest["external_python_sandbox"] is False
     assert manifest["bundled_stable_runtimes"] == [
         "portable_git",

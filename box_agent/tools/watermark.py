@@ -37,12 +37,13 @@ _RASTERIZABLE_MIME = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 
 # Bundled CJK font so non-Latin (e.g. Chinese) custom watermark text renders
 # consistently across macOS/Windows/Linux and inside the frozen runtime. The
-# canvas-fonts directory ships with the package (pyproject ``skills/**/*`` and
-# build_runtime ``--add-data box_agent/skills``).
-_CANVAS_FONTS_DIR = (
-    Path(__file__).resolve().parent.parent / "skills" / "canvas-design" / "canvas-fonts"
+# The font is a runtime resource, not owned by any marketplace Skill.
+_BUNDLED_FONT = (
+    Path(__file__).resolve().parent.parent
+    / "resources"
+    / "fonts"
+    / "NotoSansSC-Regular.otf"
 )
-_BUNDLED_FONT = _CANVAS_FONTS_DIR / "NotoSansSC-Regular.otf"
 
 # Platform system-font fallbacks (only consulted if the bundled font is missing).
 _SYSTEM_FONT_CANDIDATES = (
