@@ -52,7 +52,10 @@ def _runtime_root(explicit_root: Path | None = None) -> Path | None:
 
 
 def default_managed_mcp_config_path() -> Path:
-    """Return the shared user MCP configuration owned by Box-Agent."""
+    """Return the host-selected system MCP source, or the legacy user path."""
+    configured = os.environ.get("BOX_AGENT_MANAGED_MCP_CONFIG_PATH", "").strip()
+    if configured:
+        return Path(configured).expanduser()
     return Path.home() / ".box-agent" / "config" / "mcp.json"
 
 

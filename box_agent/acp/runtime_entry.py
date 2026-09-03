@@ -12,6 +12,7 @@ import sys
 
 WEB_EXTRACT_MCP_ARG = "--web-extract-mcp"
 BOOTSTRAP_MCP_CONFIG_ARG = "--bootstrap-mcp-config"
+CONNECTOR_PROXY_MCP_ARG = "--connector-proxy-mcp"
 
 
 class _McpStdoutProxy:
@@ -62,6 +63,17 @@ def main() -> None:
         finally:
             # MCP owns and may close the duplicate buffer. Restore the original
             # stream before PyInstaller performs its final stdout flush.
+            sys.stdout = protocol_stdout
+        return
+
+    if sys.argv[1:2] == [CONNECTOR_PROXY_MCP_ARG]:
+        from box_agent.mcp_servers.connector_proxy_server import main as run_connector_proxy_mcp
+
+        protocol_stdout = sys.stdout
+        sys.stdout = _McpStdoutProxy(protocol_stdout)
+        try:
+            run_connector_proxy_mcp(sys.argv[2:])
+        finally:
             sys.stdout = protocol_stdout
         return
 

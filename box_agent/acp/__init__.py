@@ -2193,7 +2193,12 @@ class BoxACPAgent:
         memory_scarce = is_memory_scarce(self._memory.read_core() if self._memory else None)
 
         try:
-            _user_mcp = Path.home() / ".box-agent" / "config" / "mcp.json"
+            _host_mcp = os.environ.get("BOX_AGENT_MCP_CONFIG_PATH", "").strip()
+            _user_mcp = (
+                Path(_host_mcp).expanduser()
+                if _host_mcp
+                else Path.home() / ".box-agent" / "config" / "mcp.json"
+            )
             mcp_path = _user_mcp if _user_mcp.exists() else Config.find_config_file(self._config.tools.mcp_config_path)
         except Exception:
             mcp_path = None

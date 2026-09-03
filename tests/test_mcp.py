@@ -61,6 +61,10 @@ def test_public_mcp_tool_name_sanitizes_provider_invalid_remote_name():
         for character in public_name
     )
     assert public_name == _public_mcp_tool_name("pkulaw", remote_name)
+
+
+def test_connector_proxy_preserves_upstream_public_tool_name():
+    assert _public_mcp_tool_name("connector-proxy", "mcp__pkulaw__search") == "mcp__pkulaw__search"
     assert _public_mcp_tool_name("pkulaw", "search_law") == "search_law"
 
 

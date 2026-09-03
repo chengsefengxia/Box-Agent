@@ -137,7 +137,7 @@ def create_skill_tools(
     Args:
         skills_dir: Legacy single-directory entry (treated as builtin).
         sources: Ordered list of (directory, source_label) tuples. Earlier entries
-            win on name conflicts (e.g. user → builtin).
+            win on name conflicts (e.g. user → connector → builtin).
         defer_discovery: If True, skip the inline ``discover_skills()`` call
             and let the caller schedule discovery on a background task. The
             returned ``GetSkillTool`` still binds to the loader — once the

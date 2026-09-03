@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 import yaml
 
-SkillSource = Literal["builtin", "user"]
+SkillSource = Literal["builtin", "connector", "user"]
 
 MANIFEST_FILENAME = "_manifest.json"
 RESERVED_BUILTIN_SKILL_NAMES = frozenset({"roadmap"})
@@ -116,6 +116,8 @@ class Skill:
     description: str
     content: str
     source: SkillSource = "builtin"
+    owner_id: Optional[str] = None
+    disabled: bool = False
     license: Optional[str] = None
     allowed_tools: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -170,6 +172,8 @@ All files and references in this skill are relative to this directory.
             "name": self.name,
             "description": self.description,
             "source": self.source,
+            "ownerId": self.owner_id,
+            "disabled": self.disabled,
             "path": str(self.skill_path) if self.skill_path else None,
             "allowed_tools": self.allowed_tools or [],
             "required_skills": self.required_skills or [],
@@ -448,11 +452,26 @@ class SkillLoader:
                     ),
                 )
             )
+            owner_id = None
+            if source == "connector":
+                connector_dir = next(
+                    (
+                        parent.name
+                        for parent in skill_path.parents
+                        if parent.name.startswith("connector-")
+                    ),
+                    None,
+                )
+                if connector_dir:
+                    owner_id = connector_dir.removeprefix("connector-")
+
             return Skill(
                 name=frontmatter["name"],
                 description=frontmatter["description"],
                 content=processed_content,
                 source=source,
+                owner_id=owner_id,
+                disabled=source == "connector" and frontmatter.get("disable") is True,
                 license=frontmatter.get("license"),
                 allowed_tools=allowed_tools,
                 metadata=metadata,
@@ -561,7 +580,7 @@ class SkillLoader:
 
                 self._all_skills[skill.name] = skill
 
-                if skill.name in disabled_skill_names:
+                if skill.disabled or skill.name in disabled_skill_names:
                     self.loaded_skills.pop(skill.name, None)
                     continue
 

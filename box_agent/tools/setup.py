@@ -343,10 +343,21 @@ async def initialize_base_tools(
             user_skills_dir = Path.home() / ".box-agent" / "skills"
             user_skills_dir.mkdir(parents=True, exist_ok=True)
 
-            # User skills take priority on ordinary name conflicts. Runtime-
-            # contract skills such as roadmap remain canonical builtin entries.
+            # Connector companion skills are owned by the Connector lifecycle,
+            # not by the user-facing SkillHub. Keeping them in a separate source
+            # lets the host hide them from manual Skill management while the
+            # model can still discover and load their workflow guidance.
+            connector_skills_dir = (
+                Path.home() / ".box-agent" / "connectors" / "skills"
+            )
+            connector_skills_dir.mkdir(parents=True, exist_ok=True)
+
+            # Preserve the existing user-over-builtin precedence. Connector
+            # companion skills are an additional middle source, so adding the
+            # source cannot replace an already installed user Skill.
             sources = [
                 (user_skills_dir, "user"),
+                (connector_skills_dir, "connector"),
                 (builtin_dir, "builtin"),
             ]
 
@@ -377,7 +388,8 @@ async def initialize_base_tools(
                         return 0
                     _out(
                         f"{Colors.GREEN}✅ Loaded Skill tool (get_skill) — "
-                        f"user: {user_skills_dir}, builtin: {builtin_dir} "
+                        f"connector: {connector_skills_dir}, user: {user_skills_dir}, "
+                        f"builtin: {builtin_dir} "
                         f"({len(skills)} skills){Colors.RESET}"
                     )
                     return len(skills)
@@ -389,7 +401,8 @@ async def initialize_base_tools(
                     tools.extend(skill_tools)
                     _out(
                         f"{Colors.GREEN}✅ Loaded Skill tool (get_skill) — "
-                        f"user: {user_skills_dir}, builtin: {builtin_dir}{Colors.RESET}"
+                        f"connector: {connector_skills_dir}, user: {user_skills_dir}, "
+                        f"builtin: {builtin_dir}{Colors.RESET}"
                     )
                 else:
                     _out(f"{Colors.YELLOW}⚠️  No available Skills found{Colors.RESET}")
@@ -408,20 +421,24 @@ async def initialize_base_tools(
         # Keep CLI and ACP on the same user-owned configuration. Reconcile the
         # hosted search endpoint and any MCP servers advertised by the frozen
         # runtime before background discovery starts.
-        configured_mcp = Path(config.tools.mcp_config_path).expanduser()
+        host_mcp_config = os.environ.get("BOX_AGENT_MCP_CONFIG_PATH", "").strip()
+        configured_mcp = Path(host_mcp_config or config.tools.mcp_config_path).expanduser()
         bootstrap_target = (
             configured_mcp
             if configured_mcp.is_absolute()
             else Path.home() / ".box-agent" / "config" / "mcp.json"
         )
-        bootstrap = bootstrap_managed_mcp_config(bootstrap_target)
-        if bootstrap.warning:
-            _out(f"{Colors.YELLOW}⚠️  {bootstrap.warning}{Colors.RESET}")
-        mcp_config_path = (
-            bootstrap.path
-            if bootstrap.path.exists()
-            else Config.find_config_file(config.tools.mcp_config_path)
-        )
+        if host_mcp_config:
+            mcp_config_path = bootstrap_target if bootstrap_target.exists() else None
+        else:
+            bootstrap = bootstrap_managed_mcp_config(bootstrap_target)
+            if bootstrap.warning:
+                _out(f"{Colors.YELLOW}⚠️  {bootstrap.warning}{Colors.RESET}")
+            mcp_config_path = (
+                bootstrap.path
+                if bootstrap.path.exists()
+                else Config.find_config_file(config.tools.mcp_config_path)
+            )
         if mcp_config_path:
             get_mcp_tool_catalog().mark_loading()
             _out(f"{Colors.BRIGHT_CYAN}Loading MCP tools in background (from: {mcp_config_path})...{Colors.RESET}")

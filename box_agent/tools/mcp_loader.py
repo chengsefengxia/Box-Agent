@@ -80,6 +80,11 @@ def _warn(msg: str) -> None:
 
 def _public_mcp_tool_name(server_name: str, remote_name: str) -> str:
     """Return a stable provider-safe name while preserving the MCP name separately."""
+    # connector-proxy already publishes the canonical public names produced for
+    # each upstream server. Rewriting them a second time would make the host
+    # boundary observable and break deferred-tool identities after reconnects.
+    if server_name == "connector-proxy":
+        return remote_name
     mapped_name = public_browser_tool_name(server_name, remote_name)
     if (
         len(mapped_name) <= _MODEL_TOOL_NAME_MAX_LENGTH

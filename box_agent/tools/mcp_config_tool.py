@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +129,11 @@ def _browser_config_summary(config: Any) -> list[str]:
 
 
 def _resolve_write_target() -> Path:
+    host_user_path = os.environ.get("BOX_AGENT_USER_MCP_CONFIG_PATH", "").strip()
+    if host_user_path:
+        target = Path(host_user_path).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
     # Priority: loader's actual runtime path > user config dir > packaged config.
     # In dev, box-agent may boot before ~/.box-agent/config/mcp.json exists and
     # end up loading ./box_agent/config/mcp.json. Writing to user dir here would
