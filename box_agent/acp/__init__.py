@@ -1089,7 +1089,7 @@ def _connector_skill_is_granted(skill: Any, connector_skill_grants: set[str]) ->
 
 
 def _connector_status_context(selected_connector_ids: set[str]) -> str:
-    """Render the compact, session-scoped connector state appended to user content."""
+    """Render connector-level state; individual MCP server health stays internal."""
     statuses_by_connector = _connector_server_statuses()
 
     lines = ["<connector-status>"]
@@ -1098,8 +1098,13 @@ def _connector_status_context(selected_connector_ids: set[str]) -> str:
         if not statuses:
             lines.append(f"{connector_id}: disconnected")
             continue
-        for server_name, connector_name, state in sorted(statuses):
-            lines.append(f"{connector_id} {connector_name} [{server_name}]: {state}")
+        connector_name = sorted(statuses)[0][1]
+        overall_state = (
+            "connected"
+            if all(state == "connected" for _, _, state in statuses)
+            else "disconnected"
+        )
+        lines.append(f"{connector_id} {connector_name}: {overall_state}")
     if len(lines) == 1:
         lines.append("none: selected")
     lines.append("</connector-status>")

@@ -270,6 +270,13 @@ def test_acp_normalizes_connector_selection_and_renders_session_scoped_status(mo
             },
             {
                 "owner": "connector",
+                "connectorId": "pkulaw",
+                "connectorName": "北大法宝",
+                "name": "pkulaw-citation",
+                "state": "connected",
+            },
+            {
+                "owner": "connector",
                 "connectorId": "qixin",
                 "connectorName": "启信慧眼",
                 "name": "qixin-huiyan",
@@ -283,8 +290,8 @@ def test_acp_normalizes_connector_selection_and_renders_session_scoped_status(mo
     }
     assert _connector_status_context({"pkulaw", "qixin"}) == (
         "<connector-status>\n"
-        "pkulaw 北大法宝 [pkulaw-law-search-semantic]: connected\n"
-        "qixin 启信慧眼 [qixin-huiyan]: error\n"
+        "pkulaw 北大法宝: connected\n"
+        "qixin 启信慧眼: disconnected\n"
         "</connector-status>"
     )
     assert _connected_connector_ids({"pkulaw", "qixin"}) == frozenset({"pkulaw"})
@@ -306,6 +313,33 @@ def test_acp_normalizes_connector_selection_and_renders_session_scoped_status(mo
         "custom_text": "突出年度案例",
         "trigger": "user",
     }
+
+
+def test_acp_marks_multi_server_connector_disconnected_when_any_server_is_down(monkeypatch):
+    monkeypatch.setattr(
+        "box_agent.acp.get_mcp_status",
+        lambda: [
+            {
+                "owner": "connector",
+                "connectorId": "pkulaw",
+                "connectorName": "北大法宝",
+                "name": "pkulaw-search",
+                "state": "connected",
+            },
+            {
+                "owner": "connector",
+                "connectorId": "pkulaw",
+                "connectorName": "北大法宝",
+                "name": "pkulaw-citation",
+                "state": "failed",
+            },
+        ],
+    )
+
+    assert _connector_status_context({"pkulaw"}) == (
+        "<connector-status>\npkulaw 北大法宝: disconnected\n</connector-status>"
+    )
+    assert _connected_connector_ids({"pkulaw"}) == frozenset()
 
 
 @pytest.mark.asyncio
@@ -1236,7 +1270,7 @@ async def test_acp_appends_connector_status_to_every_user_turn(tmp_path, monkeyp
 
     messages = agent._sessions[session.sessionId].agent.messages
     assert messages[-4].content == (
-        "first\n\n<connector-status>\npkulaw 北大法宝 [pkulaw-law-search-semantic]: connected\n</connector-status>"
+        "first\n\n<connector-status>\npkulaw 北大法宝: connected\n</connector-status>"
     )
     assert messages[-2].content == (
         "second\n\n<connector-status>\nnone: selected\n</connector-status>"
