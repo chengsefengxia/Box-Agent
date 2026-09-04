@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 
 McpOwner = Literal["system", "connector", "user"]
+_CONNECTOR_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,7 @@ class ResolvedMcpServer:
     owner: McpOwner
     config_id: str
     connector_id: str | None
+    connector_name: str | None
     source_path: str
     fingerprint: str
 
@@ -78,16 +81,32 @@ def _read_servers(source: McpConfigSource) -> dict[str, dict]:
     return servers
 
 
-def _server_identity(source: McpConfigSource, name: str, config: dict) -> tuple[str, str | None]:
+def _server_identity(
+    source: McpConfigSource,
+    name: str,
+    config: dict,
+) -> tuple[str, str | None, str | None]:
     connector_id = config.get("_connectorId")
     if source.owner == "connector":
-        normalized_connector_id = (
-            connector_id.strip() if isinstance(connector_id, str) and connector_id.strip() else name
+        if not isinstance(connector_id, str):
+            raise ValueError(f"Connector MCP server {name} is missing _connectorId")
+        normalized_connector_id = connector_id.strip().lower()
+        if not _CONNECTOR_ID_PATTERN.fullmatch(normalized_connector_id):
+            raise ValueError(f"Connector MCP server {name} has an invalid _connectorId")
+        connector_name = config.get("_connectorName")
+        normalized_connector_name = (
+            connector_name.strip()
+            if isinstance(connector_name, str) and connector_name.strip()
+            else normalized_connector_id
         )
-        return f"connector:{normalized_connector_id}", normalized_connector_id
+        return (
+            f"connector:{normalized_connector_id}",
+            normalized_connector_id,
+            normalized_connector_name,
+        )
     if source.owner == "system":
-        return f"system:{name}", None
-    return f"custom-mcp:{name}", None
+        return f"system:{name}", None, None
+    return f"custom-mcp:{name}", None, None
 
 
 def _fingerprint(
@@ -131,7 +150,7 @@ def resolve_mcp_sources(
                     f"{source.owner}:{name} conflicts with {resolved[name].owner}:{name}"
                 )
                 continue
-            config_id, connector_id = _server_identity(source, name, config)
+            config_id, connector_id, connector_name = _server_identity(source, name, config)
             credential_ref = config.get("credentialRef")
             credential_version = (
                 credential_versions.get(credential_ref, 0)
@@ -144,6 +163,7 @@ def resolve_mcp_sources(
                 owner=source.owner,
                 config_id=config_id,
                 connector_id=connector_id,
+                connector_name=connector_name,
                 source_path=str(source.path),
                 fingerprint=_fingerprint(source, config_id, config, credential_version),
             )

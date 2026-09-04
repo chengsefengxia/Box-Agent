@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from box_agent.tools.skill_loader import SkillLoader
+from box_agent.tools.skill_loader import SKILL_SLOT_SENTINEL, SkillLoader, SkillSelector
 
 
 def _write_connector_skill(root: Path, *, disabled: bool = False) -> Path:
@@ -46,6 +46,31 @@ def test_disabled_connector_skill_stays_out_of_model_catalog(tmp_path: Path) -> 
     disabled = loader.get_skill("pkulaw", include_disabled=True)
     assert disabled is not None
     assert disabled.disabled is True
+
+
+def test_connector_skill_requires_connection_for_new_matching_but_stays_after_loading(
+    tmp_path: Path,
+) -> None:
+    connector_root = tmp_path / "connectors" / "skills"
+    _write_connector_skill(connector_root)
+    loader = SkillLoader(sources=[(connector_root, "connector")])
+    loader.discover_skills()
+    connected_connectors: set[str] = set()
+    selector = SkillSelector(
+        loader,
+        skill_filter=lambda skill: skill.source != "connector"
+        or skill.owner_id in connected_connectors,
+    )
+    selector.bind(f"prefix\n\n{SKILL_SLOT_SENTINEL}\n\nsuffix")
+
+    assert "pkulaw" not in (selector.update("PKULaw legal search") or "")
+
+    connected_connectors.add("pkulaw")
+    assert "pkulaw" in (selector.update("PKULaw legal search") or "")
+
+    connected_connectors.clear()
+    selector.update("continue")
+    assert "pkulaw" in selector.matched_skill_names
 
 
 def test_connector_disable_flag_does_not_change_existing_user_skill_behavior(

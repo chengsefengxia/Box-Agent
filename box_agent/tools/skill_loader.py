@@ -17,7 +17,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple
 
 import yaml
 
@@ -852,6 +852,7 @@ class SkillLoader:
         always_on: frozenset[str] = frozenset({"memory-guide"}),
         max_skills: int = 16,
         include_disabled: bool = False,
+        skill_filter: Callable[[Skill], bool] | None = None,
     ) -> List[Skill]:
         """Return skills relevant to ``query`` plus the always_on set.
 
@@ -866,7 +867,11 @@ class SkillLoader:
         This is intentional: greetings like "hi" / "你好" should NOT trigger
         the full skill catalog injection.
         """
-        skill_pool = self._skill_pool(include_disabled=include_disabled)
+        skill_pool = {
+            name: skill
+            for name, skill in self._skill_pool(include_disabled=include_disabled).items()
+            if skill_filter is None or skill_filter(skill)
+        }
         always_skills = [s for s in skill_pool.values() if s.name in always_on]
 
         if not query or not query.strip():
@@ -933,6 +938,7 @@ class SkillLoader:
         query: Optional[str] = None,
         *,
         include_disabled: bool = False,
+        skill_filter: Callable[[Skill], bool] | None = None,
     ) -> str:
         """Generate a metadata-only prompt for Progressive Disclosure Level 1.
 
@@ -941,7 +947,11 @@ class SkillLoader:
         ``None``, all loaded skills are listed (legacy behavior — kept so
         callers that have not adopted filtering still work).
         """
-        skill_pool = self._skill_pool(include_disabled=include_disabled)
+        skill_pool = {
+            name: skill
+            for name, skill in self._skill_pool(include_disabled=include_disabled).items()
+            if skill_filter is None or skill_filter(skill)
+        }
         if not skill_pool:
             return ""
 
@@ -951,6 +961,7 @@ class SkillLoader:
             skills_to_render = self.filter_by_query(
                 query,
                 include_disabled=include_disabled,
+                skill_filter=skill_filter,
             )
 
         prompt_parts = ["## Available Skills\n"]
@@ -1036,14 +1047,22 @@ class SkillSelector:
 
     SLOT = SKILL_SLOT_SENTINEL
 
-    def __init__(self, skill_loader: "SkillLoader", *, include_disabled: bool = False) -> None:
+    def __init__(
+        self,
+        skill_loader: "SkillLoader",
+        *,
+        include_disabled: bool = False,
+        skill_filter: Callable[[Skill], bool] | None = None,
+    ) -> None:
         self._loader = skill_loader
         self._include_disabled = include_disabled
+        self._skill_filter = skill_filter
         self._prefix: Optional[str] = None
         self._suffix: Optional[str] = None
         self._cumulative: List[str] = []
         self._last_sig: Tuple[str, ...] = ()
         self._last_matched_names: Tuple[str, ...] = ()
+        self._sticky_skill_names: Set[str] = set()
 
     @property
     def bound(self) -> bool:
@@ -1096,16 +1115,24 @@ class SkillSelector:
             sig: Tuple[str, ...] = ()
             matched_names: Tuple[str, ...] = ()
         else:
+            def visible(skill: Skill) -> bool:
+                return skill.name in self._sticky_skill_names or (
+                    self._skill_filter is None or self._skill_filter(skill)
+                )
+
             skills = self._loader.filter_by_query(
                 query,
                 include_disabled=self._include_disabled,
+                skill_filter=visible,
             )
             matched_names = tuple(s.name for s in skills)
+            self._sticky_skill_names.update(matched_names)
             sig = tuple(sorted(matched_names))
             if skills:
                 skills_md = self._loader.get_skills_metadata_prompt(
                     query=query,
                     include_disabled=self._include_disabled,
+                    skill_filter=visible,
                 )
             else:
                 skills_md = ""

@@ -32,12 +32,18 @@ class FakeMCPTool(Tool):
         *,
         always_load: bool = False,
         parameters: dict | None = None,
+        connector_id: str | None = None,
+        connector_name: str | None = None,
+        remote_name: str | None = None,
     ) -> None:
         self._name = name
         self._server_name = server_name
         self._description = description
         self._always_load = always_load
         self._parameters = parameters or {"type": "object", "properties": {}}
+        self._connector_id = connector_id
+        self._connector_name = connector_name
+        self._remote_name = remote_name or name
         self._mcp_generation = 0
         self.calls = 0
 
@@ -64,6 +70,18 @@ class FakeMCPTool(Tool):
     @property
     def mcp_always_load(self) -> bool:
         return self._always_load
+
+    @property
+    def mcp_connector_id(self) -> str | None:
+        return self._connector_id
+
+    @property
+    def mcp_connector_name(self) -> str | None:
+        return self._connector_name
+
+    @property
+    def remote_name(self) -> str:
+        return self._remote_name
 
     @property
     def mcp_generation(self) -> int:
@@ -148,6 +166,110 @@ async def test_search_activates_only_the_calling_session() -> None:
     assert [item.name for item in exposed] == ["find_customer"]
     assert exposed[0].parameters == schema
     assert second.prepare_tools([]).tools == []
+
+
+@pytest.mark.asyncio
+async def test_tool_search_filters_connector_tools_before_ranking_and_activation() -> None:
+    catalog = MCPToolCatalog()
+    pkulaw = FakeMCPTool(
+        "mcp__pkulaw__search_case",
+        "pkulaw",
+        "Search laws and cases",
+        connector_id="pkulaw",
+        connector_name="北大法宝",
+        remote_name="search_case",
+    )
+    qixin = FakeMCPTool(
+        "mcp__qixin__search_company",
+        "qixin",
+        "Search companies",
+        connector_id="qixin",
+        connector_name="启信慧眼",
+        remote_name="search_company",
+    )
+    catalog.replace_server("pkulaw", [pkulaw])
+    catalog.replace_server("qixin", [qixin])
+    activated = OrderedDict()
+    search = ToolSearchTool(
+        catalog,
+        activated,
+        allowed_connector_ids_provider=lambda: frozenset({"pkulaw"}),
+    )
+
+    result = await search.execute(queries=["search"], top_k=5)
+    payload = json.loads(result.content)
+
+    assert payload["catalog_tool_count"] == 1
+    assert payload["activated"] == [
+        {
+            "name": "mcp__pkulaw__search_case",
+            "server_name": "pkulaw",
+            "connector_id": "pkulaw",
+            "connector_name": "北大法宝",
+            "remote_name": "search_case",
+            "description": "Search laws and cases",
+            "already_active": False,
+        }
+    ]
+    assert list(activated) == ["mcp:pkulaw/mcp__pkulaw__search_case"]
+
+
+@pytest.mark.asyncio
+async def test_connector_tool_becomes_hidden_and_uncallable_when_conversation_disables_it() -> None:
+    catalog = MCPToolCatalog()
+    tool = FakeMCPTool(
+        "mcp__pkulaw__search_case",
+        "pkulaw",
+        connector_id="pkulaw",
+    )
+    catalog.replace_server("pkulaw", [tool])
+    activated = OrderedDict()
+    allowed_connector_ids = {"pkulaw"}
+    search = ToolSearchTool(
+        catalog,
+        activated,
+        allowed_connector_ids_provider=lambda: frozenset(allowed_connector_ids),
+    )
+    await search.execute(query="case")
+    manager = MCPToolExposureManager(
+        catalog,
+        activated,
+        allowed_connector_ids_provider=lambda: frozenset(allowed_connector_ids),
+    )
+    offered = manager.prepare_tools([])
+
+    assert [item.name for item in offered.tools] == ["mcp__pkulaw__search_case"]
+    allowed_connector_ids.clear()
+    assert manager.prepare_tools([]).tools == []
+    assert manager.validate_call(
+        "mcp__pkulaw__search_case",
+        offered.mcp_generations["mcp__pkulaw__search_case"],
+        tool,
+    ) == "MCP tool 'mcp__pkulaw__search_case' is not enabled for this conversation; search again."
+
+
+@pytest.mark.asyncio
+async def test_tool_search_activates_all_tools_from_an_enabled_server_without_ranking() -> None:
+    catalog = MCPToolCatalog()
+    tool = FakeMCPTool(
+        "mcp__pkulaw__search_case",
+        "pkulaw-law-search-semantic",
+        connector_id="pkulaw",
+    )
+    catalog.replace_server("pkulaw-law-search-semantic", [tool])
+    activated = OrderedDict()
+    search = ToolSearchTool(
+        catalog,
+        activated,
+        allowed_connector_ids_provider=lambda: frozenset({"pkulaw"}),
+    )
+
+    result = await search.execute(server_name="pkulaw-law-search-semantic")
+
+    payload = json.loads(result.content)
+    assert payload["matched_count"] == 1
+    assert payload["activated_count"] == 1
+    assert payload["activated"][0]["name"] == "mcp__pkulaw__search_case"
 
 
 def test_always_load_is_visible_without_activation() -> None:
@@ -359,6 +481,7 @@ def test_search_provider_schemas_do_not_require_top_level_unions() -> None:
     {"query": "forecast"},
     {"queries": ["forecast"]},
     {"tool_names": ["weather/get_forecast"]},
+    {"server_name": "weather"},
     {"query": "forecast", "queries": ["forecast"],
      "tool_names": ["weather/get_forecast"]},
 ])
@@ -383,7 +506,6 @@ async def test_search_invoke_accepts_each_input_form_and_combined_inputs(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", [
     {},
-    {"top_k": 2, "server_name": "weather"},
     {"query": ""},
     {"query": "  "},
     {"queries": [" "]},

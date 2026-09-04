@@ -21,6 +21,9 @@ import box_agent.composition as composition_module
 import box_agent.runtime as runtime_module
 from box_agent.acp import (
     BoxACPAgent,
+    _connected_connector_ids,
+    _connector_ids_from_meta,
+    _connector_status_context,
     _inject_item_id,
     _latest_user_request_for_plan_detection,
     _looks_like_plan_approval_text,
@@ -252,6 +255,41 @@ def test_acp_normalizes_structured_user_decision_response_meta():
         "custom_text": "",
         "trigger": "timeout",
     }
+
+
+def test_acp_normalizes_connector_selection_and_renders_session_scoped_status(monkeypatch):
+    monkeypatch.setattr(
+        "box_agent.acp.get_mcp_status",
+        lambda: [
+            {
+                "owner": "connector",
+                "connectorId": "pkulaw",
+                "connectorName": "北大法宝",
+                "name": "pkulaw-law-search-semantic",
+                "state": "connected",
+            },
+            {
+                "owner": "connector",
+                "connectorId": "qixin",
+                "connectorName": "启信慧眼",
+                "name": "qixin-huiyan",
+                "state": "error",
+            },
+        ],
+    )
+
+    assert _connector_ids_from_meta({"selected_connector_ids": [" PKULAW ", "pkulaw"]}) == {
+        "pkulaw"
+    }
+    assert _connector_status_context({"pkulaw", "qixin"}) == (
+        "<connector-status>\n"
+        "pkulaw 北大法宝 [pkulaw-law-search-semantic]: connected\n"
+        "qixin 启信慧眼 [qixin-huiyan]: error\n"
+        "</connector-status>"
+    )
+    assert _connected_connector_ids({"pkulaw", "qixin"}) == frozenset({"pkulaw"})
+    with pytest.raises(ValueError, match="invalid connector id"):
+        _connector_ids_from_meta({"selected_connector_ids": ["pkulaw.connector"]})
     assert _user_decision_response_from_meta(
         {
             "user_decision": {
@@ -1156,6 +1194,56 @@ class DoneLLM:
 
     async def generate(self, messages, tools=None):
         return LLMResponse(content="done", finish_reason="stop")
+
+
+@pytest.mark.asyncio
+async def test_acp_appends_connector_status_to_every_user_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "box_agent.acp.get_mcp_status",
+        lambda: [
+            {
+                "owner": "connector",
+                "connectorId": "pkulaw",
+                "connectorName": "北大法宝",
+                "name": "pkulaw-law-search-semantic",
+                "state": "connected",
+            }
+        ],
+    )
+    config = Config(
+        llm=LLMConfig(api_key="test-key"),
+        agent=AgentConfig(max_steps=2, workspace_dir=str(tmp_path)),
+        tools=ToolsConfig(enable_sub_agent=False),
+    )
+    agent = BoxACPAgent(DummyConn(), config, DoneLLM(), [], "system")
+    session = await agent.newSession(
+        SimpleNamespace(
+            cwd=str(tmp_path),
+            field_meta={"selected_connector_ids": ["pkulaw"]},
+        )
+    )
+
+    await agent.prompt(
+        SimpleNamespace(sessionId=session.sessionId, prompt=[{"text": "first"}], field_meta={})
+    )
+    await agent.prompt(
+        SimpleNamespace(
+            sessionId=session.sessionId,
+            prompt=[{"text": "second"}],
+            field_meta={"selected_connector_ids": []},
+        )
+    )
+
+    messages = agent._sessions[session.sessionId].agent.messages
+    assert messages[-4].content == (
+        "first\n\n<connector-status>\npkulaw 北大法宝 [pkulaw-law-search-semantic]: connected\n</connector-status>"
+    )
+    assert messages[-2].content == (
+        "second\n\n<connector-status>\nnone: selected\n</connector-status>"
+    )
+    session_log = agent._sessions[session.sessionId].agent.session_log
+    if session_log is not None:
+        session_log.close()
 
 
 @pytest.mark.asyncio

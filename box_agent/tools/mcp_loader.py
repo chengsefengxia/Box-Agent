@@ -84,9 +84,15 @@ def _warn(msg: str) -> None:
     sys.stderr.write(msg + "\n")
 
 
-def _public_mcp_tool_name(server_name: str, remote_name: str) -> str:
+def _public_mcp_tool_name(
+    server_name: str,
+    remote_name: str,
+    connector_id: str | None = None,
+) -> str:
     """Return a stable provider-safe name while preserving the MCP name separately."""
     mapped_name = public_browser_tool_name(server_name, remote_name)
+    if connector_id and mapped_name == remote_name:
+        mapped_name = f"mcp__{server_name}__{remote_name}"
     if (
         len(mapped_name) <= _MODEL_TOOL_NAME_MAX_LENGTH
         and not _INVALID_MODEL_TOOL_NAME_CHARACTER.search(mapped_name)
@@ -338,6 +344,8 @@ class MCPTool(Tool):
         fixed_arguments: dict[str, Any] | None = None,
         execute_timeout: float | None = None,
         always_load: bool = False,
+        connector_id: str | None = None,
+        connector_name: str | None = None,
         concurrency_limiter: asyncio.Semaphore | None = None,
     ):
         self._name = name
@@ -349,6 +357,8 @@ class MCPTool(Tool):
         self._session = session
         self._execute_timeout = execute_timeout
         self._always_load = always_load
+        self._connector_id = connector_id
+        self._connector_name = connector_name
         self._concurrency_limiter = concurrency_limiter
         self._mcp_generation = 0
 
@@ -368,6 +378,14 @@ class MCPTool(Tool):
     @property
     def mcp_tool_id(self) -> str:
         return f"mcp:{self._server_name}/{self._name}"
+
+    @property
+    def mcp_connector_id(self) -> str | None:
+        return self._connector_id
+
+    @property
+    def mcp_connector_name(self) -> str | None:
+        return self._connector_name
 
     @property
     def mcp_generation(self) -> int:
@@ -533,6 +551,8 @@ class MCPServerConnection:
         execute_timeout: float | None = None,
         sse_read_timeout: float | None = None,
         always_load: bool = False,
+        connector_id: str | None = None,
+        connector_name: str | None = None,
     ):
         self.name = name
         self.connection_type = connection_type
@@ -549,6 +569,8 @@ class MCPServerConnection:
         self.execute_timeout = execute_timeout
         self.sse_read_timeout = sse_read_timeout
         self.always_load = always_load
+        self.connector_id = connector_id
+        self.connector_name = connector_name
         self._web_search_concurrency_limiter: asyncio.Semaphore | None = None
         # Connection state
         self.last_error: str | None = None
@@ -659,7 +681,11 @@ class MCPServerConnection:
             execute_timeout = self._get_execute_timeout()
             for tool in tools_list.tools:
                 parameters = tool.inputSchema if hasattr(tool, "inputSchema") else {}
-                public_name = _public_mcp_tool_name(self.name, tool.name)
+                public_name = _public_mcp_tool_name(
+                    self.name,
+                    tool.name,
+                    self.connector_id,
+                )
                 fixed_arguments = browser_tool_fixed_arguments(self.name, parameters)
                 parameters = public_browser_tool_parameters(parameters, fixed_arguments)
                 mcp_tool = MCPTool(
@@ -675,6 +701,8 @@ class MCPServerConnection:
                     fixed_arguments=fixed_arguments,
                     execute_timeout=execute_timeout,
                     always_load=_mcp_tool_always_load(self.name, tool, self.always_load),
+                    connector_id=self.connector_id,
+                    connector_name=self.connector_name,
                     concurrency_limiter=self._concurrency_limiter_for_tool(tool.name),
                 )
                 self.tools.append(mcp_tool)
@@ -931,6 +959,7 @@ class McpServerStatus:
     owner: str = "user"
     config_id: str = ""
     connector_id: str | None = None
+    connector_name: str | None = None
     source_path: str = ""
     transport: str = ""
     tool_count: int = 0
@@ -1024,6 +1053,7 @@ def _record_status(
         owner=definition.owner if definition else "user",
         config_id=definition.config_id if definition else f"custom-mcp:{name}",
         connector_id=definition.connector_id if definition else None,
+        connector_name=definition.connector_name if definition else None,
         source_path=definition.source_path if definition else (_mcp_config_path or ""),
         transport=transport,
         tool_count=tool_count, tools=tools or [], error=error,
@@ -1038,6 +1068,7 @@ def get_mcp_status() -> list[dict]:
             "owner": s.owner,
             "configId": s.config_id,
             "connectorId": s.connector_id,
+            "connectorName": s.connector_name,
             "sourcePath": s.source_path,
             "state": s.state,
             "transport": s.transport,
@@ -1106,6 +1137,7 @@ def _materialize_server_config(definition: ResolvedMcpServer) -> dict:
     server_config = dict(definition.config)
     credential_ref = server_config.pop("credentialRef", None)
     server_config.pop("_connectorId", None)
+    server_config.pop("_connectorName", None)
     if isinstance(credential_ref, str):
         credential_headers = _mcp_runtime_credentials.get(credential_ref)
         if credential_headers:
@@ -1150,6 +1182,8 @@ def _build_connection(definition: ResolvedMcpServer) -> "MCPServerConnection":
         execute_timeout=server_config.get("execute_timeout"),
         sse_read_timeout=server_config.get("sse_read_timeout"),
         always_load=bool(server_config.get("alwaysLoad", False)),
+        connector_id=definition.connector_id,
+        connector_name=definition.connector_name,
     )
 
 

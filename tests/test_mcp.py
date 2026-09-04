@@ -72,6 +72,13 @@ def test_public_mcp_tool_name_avoids_sanitized_name_collisions():
     assert dotted != slashed
 
 
+def test_connector_tools_receive_a_qualified_model_facing_name():
+    assert _public_mcp_tool_name("pkulaw", "search_case", "pkulaw") == "mcp__pkulaw__search_case"
+    assert _public_mcp_tool_name(
+        "pkulaw", "law.search", "pkulaw"
+    ).startswith("mcp__pkulaw__law_search__")
+
+
 def test_server_default_controls_tool_always_load_policy():
     deferred = SimpleNamespace(meta={"boxAgent": {"alwaysLoad": False}})
     assert _mcp_tool_always_load("ordinary-server", deferred, True) is True
@@ -90,6 +97,7 @@ def test_connector_runtime_credential_is_injected_without_forwarding_private_fie
         owner="connector",
         config_id="connector:pkulaw",
         connector_id="pkulaw",
+        connector_name="北大法宝",
         source_path="connectors/mcp.json",
         fingerprint="fingerprint",
     )

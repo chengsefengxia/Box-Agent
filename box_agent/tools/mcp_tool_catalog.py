@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from threading import RLock
 
@@ -65,6 +65,9 @@ class MCPToolEntry:
     tool: Tool
     generation: int
     always_load: bool
+    connector_id: str | None = None
+    connector_name: str | None = None
+    remote_name: str | None = None
     name_conflict: bool = False
 
 
@@ -169,6 +172,9 @@ class MCPToolCatalog:
                     tool=tool,
                     generation=generation,
                     always_load=bool(getattr(tool, "mcp_always_load", False)),
+                    connector_id=getattr(tool, "mcp_connector_id", None),
+                    connector_name=getattr(tool, "mcp_connector_name", None),
+                    remote_name=getattr(tool, "remote_name", raw_name),
                 )
             self._rebuild_conflicts()
             return generation
@@ -207,14 +213,26 @@ class MCPToolCatalog:
             return None
         return matches[0]
 
+    @staticmethod
+    def _visible(
+        entry: MCPToolEntry,
+        entry_filter: Callable[[MCPToolEntry], bool] | None,
+    ) -> bool:
+        return entry_filter is None or entry_filter(entry)
+
     def search(
         self,
         query: str,
         *,
         server_name: str | None = None,
         top_k: int = 5,
+        entry_filter: Callable[[MCPToolEntry], bool] | None = None,
     ) -> list[MCPToolEntry]:
-        ranked = self._ranked_search(query, server_name=server_name)
+        ranked = self._ranked_search(
+            query,
+            server_name=server_name,
+            entry_filter=entry_filter,
+        )
         return [entry for *_, entry in ranked[: max(1, top_k)]]
 
     def search_many(
@@ -223,6 +241,7 @@ class MCPToolCatalog:
         *,
         server_name: str | None = None,
         top_k: int = 5,
+        entry_filter: Callable[[MCPToolEntry], bool] | None = None,
     ) -> list[MCPToolEntry]:
         """Merge independent keyword searches using each tool's best rank."""
         normalized_queries: list[str] = []
@@ -240,7 +259,11 @@ class MCPToolCatalog:
         ] = {}
         for query_index, query in enumerate(normalized_queries):
             for exact_priority, neg_relevance, neg_matched, tool_id, entry in (
-                self._ranked_search(query, server_name=server_name)
+                self._ranked_search(
+                    query,
+                    server_name=server_name,
+                    entry_filter=entry_filter,
+                )
             ):
                 candidate = (
                     exact_priority,
@@ -262,12 +285,14 @@ class MCPToolCatalog:
         tool_names: Iterable[str],
         *,
         server_name: str | None = None,
+        entry_filter: Callable[[MCPToolEntry], bool] | None = None,
     ) -> tuple[list[MCPToolEntry], list[str]]:
         """Resolve exact catalog IDs, qualified names, or model names."""
         entries = [
             entry
             for entry in self.snapshot()
             if server_name is None or entry.server_name == server_name
+            if self._visible(entry, entry_filter)
         ]
         resolved: list[MCPToolEntry] = []
         resolved_ids: set[str] = set()
@@ -302,6 +327,7 @@ class MCPToolCatalog:
         query: str,
         *,
         server_name: str | None = None,
+        entry_filter: Callable[[MCPToolEntry], bool] | None = None,
     ) -> list[tuple[int, float, int, str, MCPToolEntry]]:
         normalized_query = _normalize(query)
         query_terms = tuple(dict.fromkeys(_tokenize(query)))
@@ -311,12 +337,17 @@ class MCPToolCatalog:
         for entry in self.snapshot():
             if server_name and entry.server_name != server_name:
                 continue
+            if not self._visible(entry, entry_filter):
+                continue
             model_terms = tuple(dict.fromkeys(_tokenize(entry.model_name)))
             model_term_set = set(model_terms)
             server_terms = tuple(
                 term
                 for term in dict.fromkeys(_tokenize(entry.server_name))
                 if term not in model_term_set
+            )
+            connector_terms = tuple(
+                dict.fromkeys(_tokenize(f"{entry.connector_id or ''} {entry.connector_name or ''}"))
             )
             documents.append(
                 (
@@ -326,6 +357,7 @@ class MCPToolCatalog:
                     _normalize(f"{entry.server_name} {entry.model_name}"),
                     model_terms,
                     server_terms,
+                    connector_terms,
                     tuple(dict.fromkeys(_tokenize(entry.description))),
                 )
             )
@@ -338,7 +370,8 @@ class MCPToolCatalog:
         average_server_name_length = sum(len(item[5]) for item in documents) / len(
             documents
         )
-        average_description_length = sum(len(item[6]) for item in documents) / len(
+        average_connector_length = sum(len(item[6]) for item in documents) / len(documents)
+        average_description_length = sum(len(item[7]) for item in documents) / len(
             documents
         )
         document_frequencies = {
@@ -346,6 +379,7 @@ class MCPToolCatalog:
                 sum(_prefix_term_frequency(term, item[4]) > 0 for item in documents),
                 sum(_prefix_term_frequency(term, item[5]) > 0 for item in documents),
                 sum(_prefix_term_frequency(term, item[6]) > 0 for item in documents),
+                sum(_prefix_term_frequency(term, item[7]) > 0 for item in documents),
             )
             for term in query_terms
         }
@@ -358,6 +392,7 @@ class MCPToolCatalog:
             normalized_server_name,
             model_name_terms,
             server_name_terms,
+            connector_terms,
             description_terms,
         ) in documents:
             exact_priority = 3
@@ -378,12 +413,14 @@ class MCPToolCatalog:
             for term in query_terms:
                 model_name_frequency = _prefix_term_frequency(term, model_name_terms)
                 server_name_frequency = _prefix_term_frequency(term, server_name_terms)
+                connector_frequency = _prefix_term_frequency(term, connector_terms)
                 description_frequency = _prefix_term_frequency(term, description_terms)
-                if model_name_frequency or server_name_frequency or description_frequency:
+                if model_name_frequency or server_name_frequency or connector_frequency or description_frequency:
                     matched_terms += 1
                 (
                     model_name_document_frequency,
                     server_name_document_frequency,
+                    connector_document_frequency,
                     description_document_frequency,
                 ) = document_frequencies[term]
                 relevance += 2.0 * _bm25_term_score(
@@ -399,6 +436,13 @@ class MCPToolCatalog:
                     document_count=len(documents),
                     field_length=len(server_name_terms),
                     average_field_length=average_server_name_length,
+                )
+                relevance += 0.75 * _bm25_term_score(
+                    term_frequency=connector_frequency,
+                    document_frequency=connector_document_frequency,
+                    document_count=len(documents),
+                    field_length=len(connector_terms),
+                    average_field_length=average_connector_length,
                 )
                 relevance += _bm25_term_score(
                     term_frequency=description_frequency,
@@ -428,6 +472,9 @@ class MCPToolCatalog:
                 tool=entry.tool,
                 generation=entry.generation,
                 always_load=entry.always_load,
+                connector_id=entry.connector_id,
+                connector_name=entry.connector_name,
+                remote_name=entry.remote_name,
                 name_conflict=counts[entry.model_name] > 1,
             )
             for tool_id, entry in self._entries.items()

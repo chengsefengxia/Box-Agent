@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from box_agent.tools.mcp_sources import configured_mcp_sources, resolve_mcp_sources
+import pytest
+
+from box_agent.tools.mcp_sources import McpConfigSource, configured_mcp_sources, resolve_mcp_sources
 
 
 def _write(path: Path, servers: dict) -> None:
@@ -36,6 +38,7 @@ def test_resolve_sources_preserves_owner_and_blocks_user_shadowing(
             "law": {
                 "url": "https://example.test/mcp",
                 "_connectorId": "pkulaw",
+                "_connectorName": "北大法宝",
                 "credentialRef": "connector:pkulaw:default",
             }
         },
@@ -50,6 +53,7 @@ def test_resolve_sources_preserves_owner_and_blocks_user_shadowing(
     assert resolved.servers["playwright"].owner == "system"
     assert resolved.servers["law"].config_id == "connector:pkulaw"
     assert resolved.servers["law"].connector_id == "pkulaw"
+    assert resolved.servers["law"].connector_name == "北大法宝"
     assert resolved.servers["mine"].config_id == "custom-mcp:mine"
     assert resolved.conflicts == ("user:playwright conflicts with system:playwright",)
 
@@ -81,3 +85,16 @@ def test_reserved_official_name_is_rejected_even_when_connector_is_disconnected(
 
     assert "pkulaw" not in resolved.servers
     assert resolved.conflicts == ("user:pkulaw uses a protected server name",)
+
+
+def test_connector_source_requires_a_normalized_connector_id(tmp_path: Path) -> None:
+    connector = tmp_path / "connector" / "mcp.json"
+    _write(connector, {"law": {"url": "https://example.test/mcp", "_connectorId": " PKULAW "}})
+
+    source = McpConfigSource("connector", connector)
+    resolved = resolve_mcp_sources((source,))
+    assert resolved.servers["law"].connector_id == "pkulaw"
+
+    _write(connector, {"law": {"url": "https://example.test/mcp", "_connectorId": "bad.id"}})
+    with pytest.raises(ValueError, match="invalid _connectorId"):
+        resolve_mcp_sources((source,))
