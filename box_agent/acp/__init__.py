@@ -1014,11 +1014,14 @@ class SessionState:
     last_error_details: dict[str, Any] | None = None
     mcp_fallback_tools: dict[str, Any] = field(default_factory=dict)
     selected_connector_ids: set[str] = field(default_factory=set)
+    connector_statuses: tuple[tuple[str, str, str], ...] | None = None
 
 
 _CONTEXT_SUMMARY_MAX_OUTPUT_TOKENS = 4_096
 _TITLE_MAX_OUTPUT_TOKENS = 8_000
 _CONNECTOR_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_CONNECTOR_STATUS_VALUES = frozenset({"connected", "disconnected"})
+_MAX_CONNECTOR_STATUSES = 256
 
 
 def _connector_ids_from_meta(meta: Any) -> set[str] | None:
@@ -1039,6 +1042,49 @@ def _connector_ids_from_meta(meta: Any) -> set[str] | None:
             raise ValueError("selected_connector_ids contains an invalid connector id")
         selected.add(connector_id)
     return selected
+
+
+def _connector_statuses_from_meta(
+    meta: Any,
+) -> tuple[tuple[str, str, str], ...] | None:
+    """Read the host's complete connector catalog snapshot for one turn."""
+    if not isinstance(meta, dict):
+        return None
+    marker = meta.get("connector_statuses", meta.get("connectorStatuses"))
+    if marker is None:
+        return None
+    if not isinstance(marker, list):
+        raise ValueError("connector_statuses must be an array")
+    if len(marker) > _MAX_CONNECTOR_STATUSES:
+        raise ValueError("connector_statuses contains too many entries")
+
+    statuses: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for raw in marker:
+        if not isinstance(raw, dict):
+            raise ValueError("connector_statuses entries must be objects")
+        raw_id = raw.get("id")
+        raw_name = raw.get("name")
+        raw_status = raw.get("status")
+        if not isinstance(raw_id, str):
+            raise ValueError("connector_statuses id must be a string")
+        connector_id = raw_id.strip().lower()
+        if not _CONNECTOR_ID_PATTERN.fullmatch(connector_id):
+            raise ValueError("connector_statuses contains an invalid connector id")
+        if connector_id in seen:
+            raise ValueError("connector_statuses contains a duplicate connector id")
+        if (
+            not isinstance(raw_name, str)
+            or not raw_name.strip()
+            or len(raw_name.strip()) > 128
+            or any(character in raw_name for character in "\r\n")
+        ):
+            raise ValueError("connector_statuses contains an invalid connector name")
+        if not isinstance(raw_status, str) or raw_status not in _CONNECTOR_STATUS_VALUES:
+            raise ValueError("connector_statuses contains an invalid status")
+        seen.add(connector_id)
+        statuses.append((connector_id, raw_name.strip(), raw_status))
+    return tuple(statuses)
 
 
 def _connector_server_statuses() -> dict[str, list[tuple[str, str, str]]]:
@@ -1088,8 +1134,20 @@ def _connector_skill_is_granted(skill: Any, connector_skill_grants: set[str]) ->
     ) in connector_skill_grants
 
 
-def _connector_status_context(selected_connector_ids: set[str]) -> str:
+def _connector_status_context(
+    selected_connector_ids: set[str],
+    connector_statuses: tuple[tuple[str, str, str], ...] | None = None,
+) -> str:
     """Render connector-level state; individual MCP server health stays internal."""
+    if connector_statuses is not None:
+        lines = ["<connector-status>"]
+        lines.extend(
+            f"{connector_id} {connector_name}: {status}"
+            for connector_id, connector_name, status in connector_statuses
+        )
+        lines.append("</connector-status>")
+        return "\n".join(lines)
+
     statuses_by_connector = _connector_server_statuses()
 
     lines = ["<connector-status>"]
@@ -1654,6 +1712,7 @@ class BoxACPAgent:
                 or _DEFAULT_AGENT_TITLE
             )
         selected_connector_ids = _connector_ids_from_meta(meta) or set()
+        connector_statuses = _connector_statuses_from_meta(meta)
 
         try:
             workspace_profile = WorkspaceRegistry().get(workspace)
@@ -2173,6 +2232,7 @@ class BoxACPAgent:
             continuation_applied=session_log_restored,
             mcp_fallback_tools=dict(self._base_mcp_fallback_tools),
             selected_connector_ids=selected_connector_ids,
+            connector_statuses=connector_statuses,
         )
         trace_writer.write(
             "session.start",
@@ -2602,6 +2662,9 @@ class BoxACPAgent:
         if selected_connector_ids is not None:
             state.selected_connector_ids.clear()
             state.selected_connector_ids.update(selected_connector_ids)
+        connector_statuses = _connector_statuses_from_meta(prompt_meta)
+        if connector_statuses is not None:
+            state.connector_statuses = connector_statuses
         user_decision_response = _user_decision_response_from_meta(prompt_meta)
         if user_decision_response is not None:
             user_text = (
@@ -2621,7 +2684,10 @@ class BoxACPAgent:
                 "explicitly requests another language.]\n\n"
                 f"{user_text}"
             )
-        connector_status = _connector_status_context(state.selected_connector_ids)
+        connector_status = _connector_status_context(
+            state.selected_connector_ids,
+            state.connector_statuses,
+        )
         user_text = f"{user_text.rstrip()}\n\n{connector_status}"
         requested_llm_binding = _normalize_llm_binding(prompt_meta)
         if requested_llm_binding is not None and requested_llm_binding != state.llm_binding:

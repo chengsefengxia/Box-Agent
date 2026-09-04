@@ -24,6 +24,7 @@ from box_agent.acp import (
     _connected_connector_ids,
     _connector_ids_from_meta,
     _connector_status_context,
+    _connector_statuses_from_meta,
     _inject_item_id,
     _latest_user_request_for_plan_detection,
     _looks_like_plan_approval_text,
@@ -294,9 +295,35 @@ def test_acp_normalizes_connector_selection_and_renders_session_scoped_status(mo
         "qixin 启信慧眼: disconnected\n"
         "</connector-status>"
     )
+    connector_statuses = _connector_statuses_from_meta(
+        {
+            "connector_statuses": [
+                {"id": "qixin", "name": "启信慧眼", "status": "disconnected"},
+                {"id": "pkulaw", "name": "北大法宝", "status": "connected"},
+            ]
+        }
+    )
+    assert connector_statuses == (
+        ("qixin", "启信慧眼", "disconnected"),
+        ("pkulaw", "北大法宝", "connected"),
+    )
+    assert _connector_status_context({"pkulaw"}, connector_statuses) == (
+        "<connector-status>\n"
+        "qixin 启信慧眼: disconnected\n"
+        "pkulaw 北大法宝: connected\n"
+        "</connector-status>"
+    )
     assert _connected_connector_ids({"pkulaw", "qixin"}) == frozenset({"pkulaw"})
     with pytest.raises(ValueError, match="invalid connector id"):
         _connector_ids_from_meta({"selected_connector_ids": ["pkulaw.connector"]})
+    with pytest.raises(ValueError, match="invalid status"):
+        _connector_statuses_from_meta(
+            {
+                "connector_statuses": [
+                    {"id": "pkulaw", "name": "北大法宝", "status": "connecting"}
+                ]
+            }
+        )
     assert _user_decision_response_from_meta(
         {
             "user_decision": {
@@ -1253,7 +1280,13 @@ async def test_acp_appends_connector_status_to_every_user_turn(tmp_path, monkeyp
     session = await agent.newSession(
         SimpleNamespace(
             cwd=str(tmp_path),
-            field_meta={"selected_connector_ids": ["pkulaw"]},
+            field_meta={
+                "selected_connector_ids": ["pkulaw"],
+                "connector_statuses": [
+                    {"id": "qixin", "name": "启信慧眼", "status": "disconnected"},
+                    {"id": "pkulaw", "name": "北大法宝", "status": "connected"},
+                ],
+            },
         )
     )
 
@@ -1264,16 +1297,28 @@ async def test_acp_appends_connector_status_to_every_user_turn(tmp_path, monkeyp
         SimpleNamespace(
             sessionId=session.sessionId,
             prompt=[{"text": "second"}],
-            field_meta={"selected_connector_ids": []},
+            field_meta={
+                "selected_connector_ids": [],
+                "connector_statuses": [
+                    {"id": "qixin", "name": "启信慧眼", "status": "disconnected"},
+                    {"id": "pkulaw", "name": "北大法宝", "status": "disconnected"},
+                ],
+            },
         )
     )
 
     messages = agent._sessions[session.sessionId].agent.messages
     assert messages[-4].content == (
-        "first\n\n<connector-status>\npkulaw 北大法宝: connected\n</connector-status>"
+        "first\n\n<connector-status>\n"
+        "qixin 启信慧眼: disconnected\n"
+        "pkulaw 北大法宝: connected\n"
+        "</connector-status>"
     )
     assert messages[-2].content == (
-        "second\n\n<connector-status>\nnone: selected\n</connector-status>"
+        "second\n\n<connector-status>\n"
+        "qixin 启信慧眼: disconnected\n"
+        "pkulaw 北大法宝: disconnected\n"
+        "</connector-status>"
     )
     session_log = agent._sessions[session.sessionId].agent.session_log
     if session_log is not None:
