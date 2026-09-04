@@ -588,6 +588,7 @@ def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path, 
                         llm=None, permission_engine: PermissionEngine | None = None,
                         skill_runtime_context: SkillRuntimeContext | None = None,
                         skill_loader=None, capability_state_provider=None,
+                        skill_access_filter=None,
                         use_output_dir: bool = True,
                         artifact_root_dir: str | Path | None = None,
                         create_artifact_root: bool = True,
@@ -613,6 +614,7 @@ def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path, 
         skill_runtime_context: Runtime env to expose to subprocess-backed tools
         skill_loader: Current live SkillLoader for explicit child Skill selection
         capability_state_provider: Read-only callable returning MCP loading/ready state
+        skill_access_filter: Conversation-specific gate for child Skill selection
         use_output_dir: If True, execute_code chdirs into {workspace}/output.
         artifact_root_dir: Optional host-supplied output root for this session.
         create_artifact_root: Create the artifact root during tool setup. Project
@@ -849,6 +851,8 @@ def add_workspace_tools(tools: List[Tool], config: Config, workspace_dir: Path, 
         )
         if skill_loader is not None:
             sub_agent_tool.set_skill_provider(lambda: skill_loader)
+        if skill_access_filter is not None:
+            sub_agent_tool.set_skill_access_filter(skill_access_filter)
         if capability_state_provider is not None:
             sub_agent_tool.set_capability_state_provider(capability_state_provider)
         tools.append(sub_agent_tool)

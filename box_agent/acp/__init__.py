@@ -983,6 +983,7 @@ class SessionState:
     thinking_enabled: bool = False  # extended thinking toggle from _meta.deep_think
     execution_profile: ExecutionProfile = "standard"
     explicitly_allowed_skill_names: set[str] = field(default_factory=set)
+    connector_skill_grants: set[str] = field(default_factory=set)
     env_context: "EnvContext | None" = None  # cached env_context, re-applied when mode switches
     skill_runtime_context: "SkillRuntimeContext | None" = None
     skill_loader: Any | None = None  # session-local loader for expert-only recommended skills
@@ -1078,6 +1079,13 @@ def _connector_skill_is_available(skill: Any, selected_connector_ids: set[str]) 
     return getattr(skill, "owner_id", None) in _connected_connector_ids(
         selected_connector_ids
     )
+
+
+def _connector_skill_is_granted(skill: Any, connector_skill_grants: set[str]) -> bool:
+    """Allow connector Skills only after this conversation's internal selector grants them."""
+    return getattr(skill, "source", None) != "connector" or getattr(
+        skill, "name", None
+    ) in connector_skill_grants
 
 
 def _connector_status_context(selected_connector_ids: set[str]) -> str:
@@ -1883,6 +1891,7 @@ class BoxACPAgent:
         preloaded_skill_hashes: dict[str, str] = {}
         skill_scratch_dir = None
         explicitly_allowed_skill_names: set[str] = set()
+        connector_skill_grants: set[str] = set()
         blocked_skill_names = (
             FAST_OPTIONAL_SKILLS if execution_profile == "fast" else frozenset()
         )
@@ -1904,6 +1913,9 @@ class BoxACPAgent:
                         blocked_skill_names=blocked_skill_names,
                         explicitly_allowed_skill_names=(
                             explicitly_allowed_skill_names
+                        ),
+                        skill_access_filter=lambda skill: _connector_skill_is_granted(
+                            skill, connector_skill_grants
                         ),
                     )
                     if isinstance(tool, GetSkillTool)
@@ -1939,6 +1951,9 @@ class BoxACPAgent:
                 skill_runtime_context=skill_runtime_context,
                 skill_loader=session_skill_loader,
                 capability_state_provider=self._sub_agent_capability_state,
+                skill_access_filter=lambda skill: _connector_skill_is_granted(
+                    skill, connector_skill_grants
+                ),
                 use_output_dir=artifact_mode != "project",
                 artifact_root_dir=output_dir,
                 create_artifact_root=artifact_mode != "project",
@@ -2081,6 +2096,8 @@ class BoxACPAgent:
                         raise ValueError(
                             f"persisted active Skill {name!r} is unavailable"
                         )
+                    if getattr(skill, "source", None) == "connector":
+                        connector_skill_grants.add(skill.name)
                     restored_skill_prompts.append(
                         (name, skill.to_prompt(), prompt_hash, load_order)
                     )
@@ -2136,6 +2153,7 @@ class BoxACPAgent:
             thinking_enabled=deep_think,
             execution_profile=execution_profile,
             explicitly_allowed_skill_names=explicitly_allowed_skill_names,
+            connector_skill_grants=connector_skill_grants,
             env_context=env_context,
             skill_runtime_context=skill_runtime_context,
             skill_loader=session_skill_loader,
@@ -2875,10 +2893,22 @@ class BoxACPAgent:
             if state.skill_selector is not None
             else ()
         )
+        if state.skill_loader is not None:
+            for skill_name in matched_skill_names:
+                skill = state.skill_loader.get_skill(skill_name)
+                if skill is not None and _connector_skill_is_available(
+                    skill, state.selected_connector_ids
+                ):
+                    state.connector_skill_grants.add(skill.name)
         explicit_skill = resolve_explicit_skill_invocation(
             state.skill_loader,
             plan_detection_text,
         )
+        if (
+            explicit_skill is not None
+            and getattr(explicit_skill, "source", None) == "connector"
+        ):
+            explicit_skill = None
         requested_host_skills = (
             _meta_string_list(prompt_meta, "selected_skill_names", limit=8)
             or _meta_string_list(prompt_meta, "selectedSkillNames", limit=8)
@@ -2887,7 +2917,8 @@ class BoxACPAgent:
             name
             for name in requested_host_skills
             if state.skill_loader is not None
-            and state.skill_loader.get_skill(name) is not None
+            and (skill := state.skill_loader.get_skill(name)) is not None
+            and getattr(skill, "source", None) != "connector"
         )
         explicitly_selected_skill_names = tuple(
             dict.fromkeys(

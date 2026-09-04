@@ -12,7 +12,7 @@ checks remain the final resource-level authority.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from ..config import ToolLimitsConfig
 from .base import Tool
@@ -539,10 +539,11 @@ class CapabilityResolver:
         *,
         parent_tools: Mapping[str, Tool],
         skill_loader: Any | None = None,
+        skill_access_filter: Callable[[Any], bool] | None = None,
         capability_state: Any = "ready",
         permission_negotiator_available: bool = False,
     ) -> ResolvedCapabilityBundle | CapabilityFailure:
-        skills_or_failure = self._resolve_skills(spec, skill_loader)
+        skills_or_failure = self._resolve_skills(spec, skill_loader, skill_access_filter)
         if isinstance(skills_or_failure, CapabilityFailure):
             return skills_or_failure
         skills = skills_or_failure
@@ -622,6 +623,7 @@ class CapabilityResolver:
         self,
         spec: DelegationSpec,
         skill_loader: Any | None,
+        skill_access_filter: Callable[[Any], bool] | None,
     ) -> tuple[Any, ...] | CapabilityFailure:
         if not spec.skill_names:
             return ()
@@ -669,6 +671,16 @@ class CapabilityResolver:
                 return CapabilityFailure(
                     code="SKILL_NOT_FOUND",
                     message=f"Required Skill '{name}' was not found.",
+                    retryable=False,
+                    details={"skill": name},
+                )
+            if skill_access_filter is not None and not skill_access_filter(skill):
+                return CapabilityFailure(
+                    code="SKILL_NOT_ENABLED_FOR_CONVERSATION",
+                    message=(
+                        f"Required Skill '{name}' is not enabled for this conversation. "
+                        "Connector Skills must be enabled from the conversation connector picker."
+                    ),
                     retryable=False,
                     details={"skill": name},
                 )

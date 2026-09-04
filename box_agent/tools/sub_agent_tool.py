@@ -281,6 +281,7 @@ class SubAgentTool(EventEmittingTool):
         # ``register_mcp_tools`` mutates in place) is built.
         self._tool_provider: Callable[[], dict[str, Tool]] | None = None
         self._skill_provider: Callable[[], Any] | None = None
+        self._skill_access_filter: Callable[[Any], bool] | None = None
         self._capability_state_provider: Callable[[], Any] | None = None
         self._permission_negotiator: Any | None = None
         self._workspace_dir = workspace_dir
@@ -354,6 +355,10 @@ class SubAgentTool(EventEmittingTool):
     def set_skill_provider(self, provider: Callable[[], Any]) -> None:
         """Wire a callable returning the current live SkillLoader."""
         self._skill_provider = provider
+
+    def set_skill_access_filter(self, skill_access_filter: Callable[[Any], bool]) -> None:
+        """Restrict child Skill requests to the parent conversation's grants."""
+        self._skill_access_filter = skill_access_filter
 
     def set_capability_state_provider(self, provider: Callable[[], Any]) -> None:
         """Wire a read-only provider for capability loading readiness."""
@@ -1339,6 +1344,7 @@ class SubAgentTool(EventEmittingTool):
             parsed,
             parent_tools=live_tools,
             skill_loader=self._resolve_skill_loader(),
+            skill_access_filter=self._skill_access_filter,
             capability_state=self._resolve_capability_state(),
             permission_negotiator_available=self._permission_negotiator is not None,
         )
