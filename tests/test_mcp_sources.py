@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from box_agent.tools import mcp_loader
 from box_agent.tools.mcp_sources import McpConfigSource, configured_mcp_sources, resolve_mcp_sources
 
 
@@ -98,3 +99,87 @@ def test_connector_source_requires_a_normalized_connector_id(tmp_path: Path) -> 
     _write(connector, {"law": {"url": "https://example.test/mcp", "_connectorId": "bad.id"}})
     with pytest.raises(ValueError, match="invalid _connectorId"):
         resolve_mcp_sources((source,))
+
+
+def test_runtime_connector_source_override_does_not_require_a_physical_file(
+    tmp_path: Path,
+) -> None:
+    user = tmp_path / "mcp.json"
+    _write(user, {"mine": {"command": "mine"}})
+    connector = McpConfigSource("connector", Path("<runtime:connector>"))
+
+    resolved = resolve_mcp_sources(
+        (connector, McpConfigSource("user", user)),
+        source_server_overrides={
+            "connector": {
+                "law": {
+                    "url": "https://example.test/mcp",
+                    "_connectorId": "pkulaw",
+                    "_connectorName": "北大法宝",
+                }
+            }
+        },
+    )
+
+    assert resolved.servers["law"].owner == "connector"
+    assert resolved.servers["law"].source_path == "<runtime:connector>"
+    assert resolved.servers["mine"].owner == "user"
+
+
+def test_loader_registers_runtime_connector_source_without_connector_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = tmp_path / "mcp.json"
+    _write(user, {"mine": {"command": "mine"}})
+    monkeypatch.setenv("BOX_AGENT_USER_MCP_CONFIG_PATH", str(user))
+    monkeypatch.delenv("BOX_AGENT_SYSTEM_MCP_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("BOX_AGENT_CONNECTOR_MCP_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("BOX_AGENT_RESERVED_MCP_SERVER_NAMES", raising=False)
+    monkeypatch.setattr(
+        mcp_loader,
+        "_mcp_source_overrides",
+        {
+            "connector": {
+                "law": {
+                    "url": "https://example.test/mcp",
+                    "_connectorId": "pkulaw",
+                }
+            }
+        },
+    )
+
+    resolved = mcp_loader._resolve_registered_sources(str(user))
+
+    assert resolved["law"].owner == "connector"
+    assert resolved["law"].source_path == "<runtime:connector>"
+    assert resolved["mine"].owner == "user"
+
+
+@pytest.mark.asyncio
+async def test_replace_runtime_connector_source_reconciles_in_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mcp_loader, "_mcp_source_overrides", {})
+    captured: list[str | None] = []
+
+    async def reconcile(source: str | None) -> dict:
+        captured.append(source)
+        return {"success": True, "source": source, "results": []}
+
+    monkeypatch.setattr(mcp_loader, "_reconcile_mcp_sources_locked", reconcile)
+
+    result = await mcp_loader.replace_mcp_source(
+        "connector",
+        {
+            "mcpServers": {
+                "law": {
+                    "url": "https://example.test/mcp",
+                    "_connectorId": "pkulaw",
+                }
+            }
+        },
+    )
+
+    assert result["success"] is True
+    assert captured == ["connector"]
+    assert set(mcp_loader._mcp_source_overrides["connector"]) == {"law"}

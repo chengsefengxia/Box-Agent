@@ -81,6 +81,17 @@ def _read_servers(source: McpConfigSource) -> dict[str, dict]:
     return servers
 
 
+def _copy_servers(raw_servers: object, source_label: str) -> dict[str, dict]:
+    if not isinstance(raw_servers, dict):
+        raise ValueError(f"mcpServers must be an object: {source_label}")
+    servers: dict[str, dict] = {}
+    for name, config in raw_servers.items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(config, dict):
+            raise ValueError(f"Invalid MCP server entry in {source_label}")
+        servers[name] = dict(config)
+    return servers
+
+
 def _server_identity(
     source: McpConfigSource,
     name: str,
@@ -133,6 +144,7 @@ def resolve_mcp_sources(
     sources: tuple[McpConfigSource, ...],
     credential_versions: dict[str, int] | None = None,
     reserved_names: set[str] | None = None,
+    source_server_overrides: dict[McpOwner, dict[str, dict]] | None = None,
 ) -> ResolvedMcpSources:
     """Resolve sources without allowing lower-trust entries to shadow protected ones."""
 
@@ -141,7 +153,14 @@ def resolve_mcp_sources(
     resolved: dict[str, ResolvedMcpServer] = {}
     conflicts: list[str] = []
     for source in sources:
-        for name, config in _read_servers(source).items():
+        if source_server_overrides is not None and source.owner in source_server_overrides:
+            servers = _copy_servers(
+                source_server_overrides[source.owner],
+                str(source.path),
+            )
+        else:
+            servers = _read_servers(source)
+        for name, config in servers.items():
             if source.owner == "user" and name in reserved_names:
                 conflicts.append(f"user:{name} uses a protected server name")
                 continue

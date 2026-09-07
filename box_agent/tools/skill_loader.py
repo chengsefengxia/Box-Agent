@@ -835,7 +835,12 @@ class SkillLoader:
         """List all loaded skill names."""
         return list(self._skill_pool(include_disabled=include_disabled).keys())
 
-    def list_skills_metadata(self, *, include_disabled: bool = False) -> List[Dict[str, object]]:
+    def list_skills_metadata(
+        self,
+        *,
+        include_disabled: bool = False,
+        include_connector: bool = True,
+    ) -> List[Dict[str, object]]:
         """Return structured metadata for every loaded skill.
 
         Intended for officev3 / ACP `_meta.skills` payloads.
@@ -843,6 +848,7 @@ class SkillLoader:
         return [
             skill.to_metadata_dict()
             for skill in self._skill_pool(include_disabled=include_disabled).values()
+            if include_connector or skill.source != "connector"
         ]
 
     def filter_by_query(

@@ -42,6 +42,7 @@ def test_connector_source_exposes_owner_metadata(tmp_path: Path) -> None:
     assert skill.owner_id == "pkulaw"
     assert skill.skill_path == skill_path
     assert skill.to_metadata_dict()["ownerId"] == "pkulaw"
+    assert loader.list_skills_metadata(include_connector=False) == []
 
 
 def test_disabled_connector_skill_stays_out_of_model_catalog(tmp_path: Path) -> None:

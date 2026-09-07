@@ -181,7 +181,7 @@ from box_agent.memory import MemoryManager
 from box_agent.retry import RetryConfig as RetryConfigBase
 from box_agent.schema import LLMProvider, Message
 from box_agent.tools.permissions import CapabilityPolicy, GrantStore, PermissionEngine
-from box_agent.tools.mcp_loader import get_mcp_status
+from box_agent.tools.mcp_loader import get_mcp_connector_server_names, get_mcp_status
 from box_agent.tools.runtime import (
     SkillRuntimeContext,
     build_skill_runtime_context,
@@ -1015,6 +1015,7 @@ class SessionState:
     mcp_fallback_tools: dict[str, Any] = field(default_factory=dict)
     selected_connector_ids: set[str] = field(default_factory=set)
     connector_statuses: tuple[tuple[str, str, str], ...] | None = None
+    connector_status_unavailable: bool = False
 
 
 _CONTEXT_SUMMARY_MAX_OUTPUT_TOKENS = 4_096
@@ -1087,6 +1088,20 @@ def _connector_statuses_from_meta(
     return tuple(statuses)
 
 
+def _connector_status_unavailable_from_meta(meta: Any) -> bool | None:
+    """Read the host signal that the connector snapshot could not be refreshed."""
+    if not isinstance(meta, dict):
+        return None
+    marker = meta.get(
+        "connector_status_unavailable", meta.get("connectorStatusUnavailable")
+    )
+    if marker is None:
+        return None
+    if not isinstance(marker, bool):
+        raise ValueError("connector_status_unavailable must be a boolean")
+    return marker
+
+
 def _connector_server_statuses() -> dict[str, list[tuple[str, str, str]]]:
     """Return the current connector runtime state keyed by canonical connector ID."""
     statuses_by_connector: dict[str, list[tuple[str, str, str]]] = {}
@@ -1110,10 +1125,13 @@ def _connector_server_statuses() -> dict[str, list[tuple[str, str, str]]]:
 
 def _connected_connector_ids(selected_connector_ids: set[str]) -> frozenset[str]:
     statuses_by_connector = _connector_server_statuses()
+    expected_by_connector = get_mcp_connector_server_names()
     return frozenset(
         connector_id
         for connector_id in selected_connector_ids
-        if (statuses := statuses_by_connector.get(connector_id))
+        if (expected := expected_by_connector.get(connector_id))
+        and (statuses := statuses_by_connector.get(connector_id))
+        and expected == {server_name for server_name, _, _ in statuses}
         and all(state == "connected" for _, _, state in statuses)
     )
 
@@ -1137,8 +1155,16 @@ def _connector_skill_is_granted(skill: Any, connector_skill_grants: set[str]) ->
 def _connector_status_context(
     selected_connector_ids: set[str],
     connector_statuses: tuple[tuple[str, str, str], ...] | None = None,
+    connector_status_unavailable: bool = False,
 ) -> str:
     """Render connector-level state; individual MCP server health stays internal."""
+    if connector_status_unavailable:
+        return (
+            "<connector-status>\n"
+            "status: unavailable\n"
+            "连接器状态读取失败，请勿沿用之前轮次的连接状态。\n"
+            "</connector-status>"
+        )
     if connector_statuses is not None:
         lines = ["<connector-status>"]
         lines.extend(
@@ -1149,6 +1175,7 @@ def _connector_status_context(
         return "\n".join(lines)
 
     statuses_by_connector = _connector_server_statuses()
+    expected_by_connector = get_mcp_connector_server_names()
 
     lines = ["<connector-status>"]
     for connector_id in sorted(selected_connector_ids):
@@ -1157,9 +1184,12 @@ def _connector_status_context(
             lines.append(f"{connector_id}: disconnected")
             continue
         connector_name = sorted(statuses)[0][1]
+        expected = expected_by_connector.get(connector_id, frozenset())
         overall_state = (
             "connected"
-            if all(state == "connected" for _, _, state in statuses)
+            if expected
+            and expected == {server_name for server_name, _, _ in statuses}
+            and all(state == "connected" for _, _, state in statuses)
             else "disconnected"
         )
         lines.append(f"{connector_id} {connector_name}: {overall_state}")
@@ -1593,7 +1623,7 @@ class BoxACPAgent:
             return None
         try:
             self._skill_loader.maybe_reload()
-            return self._skill_loader.list_skills_metadata()
+            return self._skill_loader.list_skills_metadata(include_connector=False)
         except Exception as exc:
             log.warn("skills/meta_error", message=f"Failed to build skills metadata: {exc}")
             return None
@@ -1713,6 +1743,10 @@ class BoxACPAgent:
             )
         selected_connector_ids = _connector_ids_from_meta(meta) or set()
         connector_statuses = _connector_statuses_from_meta(meta)
+        connector_status_unavailable = (
+            _connector_status_unavailable_from_meta(meta) is True
+            and connector_statuses is None
+        )
 
         try:
             workspace_profile = WorkspaceRegistry().get(workspace)
@@ -2233,6 +2267,7 @@ class BoxACPAgent:
             mcp_fallback_tools=dict(self._base_mcp_fallback_tools),
             selected_connector_ids=selected_connector_ids,
             connector_statuses=connector_statuses,
+            connector_status_unavailable=connector_status_unavailable,
         )
         trace_writer.write(
             "session.start",
@@ -2290,7 +2325,7 @@ class BoxACPAgent:
                 SKILLHUB_INSTALL_CAPABILITY_VERSION
             ]
         skills = (
-            session_skill_loader.list_skills_metadata()
+            session_skill_loader.list_skills_metadata(include_connector=False)
             if session_skill_loader is not None
             else self._skills_meta()
         )
@@ -2665,6 +2700,15 @@ class BoxACPAgent:
         connector_statuses = _connector_statuses_from_meta(prompt_meta)
         if connector_statuses is not None:
             state.connector_statuses = connector_statuses
+            state.connector_status_unavailable = False
+        else:
+            connector_status_unavailable = _connector_status_unavailable_from_meta(
+                prompt_meta
+            )
+            if connector_status_unavailable is not None:
+                state.connector_status_unavailable = connector_status_unavailable
+                if connector_status_unavailable:
+                    state.connector_statuses = None
         user_decision_response = _user_decision_response_from_meta(prompt_meta)
         if user_decision_response is not None:
             user_text = (
@@ -2687,6 +2731,7 @@ class BoxACPAgent:
         connector_status = _connector_status_context(
             state.selected_connector_ids,
             state.connector_statuses,
+            state.connector_status_unavailable,
         )
         user_text = f"{user_text.rstrip()}\n\n{connector_status}"
         requested_llm_binding = _normalize_llm_binding(prompt_meta)
@@ -3620,7 +3665,7 @@ class BoxACPAgent:
             affected = clear_mcp_runtime_credential(credential_ref)
             log.info("mcp/credential/clear", affected_servers=len(affected))
             return {"success": True, "affectedServers": affected}
-        if method == "mcp/reconcile":
+        if method in {"mcp/reconcile", "mcp/source/replace"}:
             source = params.get("source")
             if source is not None and not isinstance(source, str):
                 return {"success": False, "error": "source must be a string"}
@@ -3628,8 +3673,15 @@ class BoxACPAgent:
                 get_all_mcp_tools,
                 get_mcp_tools_for_server,
                 reconcile_mcp_sources,
+                replace_mcp_source,
             )
-            result = await reconcile_mcp_sources(source)
+            if method == "mcp/source/replace":
+                config = params.get("config")
+                if not isinstance(source, str) or not isinstance(config, dict):
+                    return {"success": False, "error": "source and config are required"}
+                result = await replace_mcp_source(source, config)
+            else:
+                result = await reconcile_mcp_sources(source)
             if not self._config.tools.mcp.deferred_loading_enabled:
                 all_mcp_tools = get_all_mcp_tools()
                 sync_mcp_tool_list(
@@ -3665,7 +3717,7 @@ class BoxACPAgent:
                     ),
                 )
             log.info(
-                "mcp/reconcile",
+                method,
                 source=source,
                 success=result.get("success"),
                 changed=len(result.get("results", [])),

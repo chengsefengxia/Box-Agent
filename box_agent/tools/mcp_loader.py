@@ -973,6 +973,7 @@ _mcp_loading: bool = False
 _mcp_config_path: str | None = None
 _mcp_sources: tuple[McpConfigSource, ...] = ()
 _mcp_server_definitions: dict[str, ResolvedMcpServer] = {}
+_mcp_source_overrides: dict[str, dict[str, dict]] = {}
 _mcp_runtime_credentials: dict[str, dict[str, str]] = {}
 _mcp_runtime_credential_versions: dict[str, int] = {}
 # Auth inputs from the last load_mcp_tools_async() call — reused by
@@ -1120,6 +1121,19 @@ def set_mcp_runtime_credential(credential_ref: str, headers: dict[str, str]) -> 
     ]
 
 
+def get_mcp_connector_server_names() -> dict[str, frozenset[str]]:
+    """Return every configured MCP server name expected for each connector."""
+    names_by_connector: dict[str, set[str]] = {}
+    for definition in _mcp_server_definitions.values():
+        if definition.owner != "connector" or not definition.connector_id:
+            continue
+        names_by_connector.setdefault(definition.connector_id, set()).add(definition.name)
+    return {
+        connector_id: frozenset(server_names)
+        for connector_id, server_names in names_by_connector.items()
+    }
+
+
 def clear_mcp_runtime_credential(credential_ref: str) -> list[str]:
     normalized_ref = credential_ref.strip()
     _mcp_runtime_credentials.pop(normalized_ref, None)
@@ -1190,6 +1204,17 @@ def _build_connection(definition: ResolvedMcpServer) -> "MCPServerConnection":
 def _resolve_registered_sources(config_path: str) -> dict[str, ResolvedMcpServer]:
     global _mcp_sources
     _mcp_sources = configured_mcp_sources(config_path)
+    if "connector" in _mcp_source_overrides and not any(
+        source.owner == "connector" for source in _mcp_sources
+    ):
+        connector_source = McpConfigSource("connector", Path("<runtime:connector>"))
+        sources = list(_mcp_sources)
+        user_index = next(
+            (index for index, source in enumerate(sources) if source.owner == "user"),
+            len(sources),
+        )
+        sources.insert(user_index, connector_source)
+        _mcp_sources = tuple(sources)
     raw_reserved_names = os.environ.get("BOX_AGENT_RESERVED_MCP_SERVER_NAMES", "")
     reserved_names: set[str] = set()
     if raw_reserved_names:
@@ -1207,6 +1232,7 @@ def _resolve_registered_sources(config_path: str) -> dict[str, ResolvedMcpServer
         _mcp_sources,
         _mcp_runtime_credential_versions,
         reserved_names,
+        _mcp_source_overrides,
     )
     for conflict in resolved.conflicts:
         _warn(f"Skipping conflicting MCP server: {conflict}")
@@ -1403,6 +1429,7 @@ async def cleanup_mcp_connections():
     _mcp_reconnect_locks.clear()
     _mcp_server_definitions = {}
     _mcp_sources = ()
+    _mcp_source_overrides.clear()
     _mcp_status.clear()
     get_mcp_tool_catalog().clear()
 
@@ -1429,6 +1456,34 @@ async def reconcile_mcp_sources(source: str | None = None) -> dict:
         )
     async with _mcp_source_reconcile_lock:
         return await _reconcile_mcp_sources_locked(source)
+
+
+async def replace_mcp_source(source: str, config: dict) -> dict:
+    """Replace a host-managed MCP source in memory and reconcile its connections."""
+
+    if source != "connector":
+        return {"success": False, "error": f"Unsupported runtime MCP source: {source}"}
+    if not isinstance(config, dict):
+        return {"success": False, "error": "config must be an object"}
+    raw_servers = config.get("mcpServers", {})
+    if not isinstance(raw_servers, dict):
+        return {"success": False, "error": "mcpServers must be an object"}
+    servers: dict[str, dict] = {}
+    for name, server_config in raw_servers.items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(server_config, dict):
+            return {"success": False, "error": "Invalid MCP server entry"}
+        servers[name] = dict(server_config)
+
+    async with _mcp_source_reconcile_lock:
+        previous = _mcp_source_overrides.get(source)
+        _mcp_source_overrides[source] = servers
+        result = await _reconcile_mcp_sources_locked(source)
+        if result.get("error") and not result.get("results"):
+            if previous is None:
+                _mcp_source_overrides.pop(source, None)
+            else:
+                _mcp_source_overrides[source] = previous
+        return result
 
 
 async def _reconcile_mcp_sources_locked(source: str | None = None) -> dict:

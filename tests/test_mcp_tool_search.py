@@ -272,6 +272,125 @@ async def test_tool_search_activates_all_tools_from_an_enabled_server_without_ra
     assert payload["activated"][0]["name"] == "mcp__pkulaw__search_case"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("connector", ["pkulaw", "北大法宝", "pkulaw 北大法宝"])
+async def test_tool_search_activates_connector_by_id_or_unique_display_name(
+    connector: str,
+) -> None:
+    catalog = MCPToolCatalog()
+    search_case = FakeMCPTool(
+        "mcp__pkulaw__search_case",
+        "pkulaw-law-search-semantic",
+        connector_id="pkulaw",
+        connector_name="北大法宝 · 法律智能检索",
+    )
+    verify_citation = FakeMCPTool(
+        "mcp__pkulaw__verify_citation",
+        "pkulaw-citation",
+        connector_id="pkulaw",
+        connector_name="北大法宝 · 法律智能检索",
+    )
+    catalog.replace_server("pkulaw-law-search-semantic", [search_case])
+    catalog.replace_server("pkulaw-citation", [verify_citation])
+    activated = OrderedDict()
+    search = ToolSearchTool(
+        catalog,
+        activated,
+        allowed_connector_ids_provider=lambda: frozenset({"pkulaw"}),
+    )
+
+    result = await search.execute(connector=connector)
+
+    payload = json.loads(result.content)
+    assert payload["resolved_connector_id"] == "pkulaw"
+    assert payload["catalog_tool_count"] == 2
+    assert payload["activated_count"] == 2
+    assert {item["name"] for item in payload["activated"]} == {
+        "mcp__pkulaw__search_case",
+        "mcp__pkulaw__verify_citation",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_search_does_not_resolve_a_disabled_connector() -> None:
+    catalog = MCPToolCatalog()
+    tool = FakeMCPTool(
+        "mcp__pkulaw__search_case",
+        "pkulaw-law-search-semantic",
+        connector_id="pkulaw",
+        connector_name="北大法宝",
+    )
+    catalog.replace_server("pkulaw-law-search-semantic", [tool])
+    search = ToolSearchTool(
+        catalog,
+        OrderedDict(),
+        allowed_connector_ids_provider=lambda: frozenset(),
+    )
+
+    result = await search.execute(connector="北大法宝")
+
+    payload = json.loads(result.content)
+    assert payload["resolved_connector_id"] is None
+    assert payload["catalog_tool_count"] == 0
+    assert payload["activated_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_unknown_connector_does_not_activate_user_mcp_tools() -> None:
+    catalog = MCPToolCatalog()
+    user_tool = FakeMCPTool("custom_lookup", "custom-server")
+    catalog.replace_server("custom-server", [user_tool])
+    activated = OrderedDict()
+    search = ToolSearchTool(catalog, activated)
+
+    result = await search.execute(connector="missing-connector")
+
+    payload = json.loads(result.content)
+    assert payload["resolved_connector_id"] is None
+    assert payload["catalog_tool_count"] == 0
+    assert payload["matched_count"] == 0
+    assert payload["activated_count"] == 0
+    assert activated == OrderedDict()
+
+
+@pytest.mark.asyncio
+async def test_tool_search_does_not_open_ambiguous_connector_name_fragments() -> None:
+    catalog = MCPToolCatalog()
+    catalog.replace_server(
+        "law-a",
+        [
+            FakeMCPTool(
+                "search_law_a",
+                "law-a",
+                connector_id="law-a",
+                connector_name="法律检索 A",
+            )
+        ],
+    )
+    catalog.replace_server(
+        "law-b",
+        [
+            FakeMCPTool(
+                "search_law_b",
+                "law-b",
+                connector_id="law-b",
+                connector_name="法律检索 B",
+            )
+        ],
+    )
+    search = ToolSearchTool(
+        catalog,
+        OrderedDict(),
+        allowed_connector_ids_provider=lambda: frozenset({"law-a", "law-b"}),
+    )
+
+    result = await search.execute(connector="法律检索")
+
+    payload = json.loads(result.content)
+    assert payload["resolved_connector_id"] is None
+    assert payload["activated_count"] == 0
+
+
 def test_always_load_is_visible_without_activation() -> None:
     catalog = MCPToolCatalog()
     tool = FakeMCPTool("health_check", "ops", always_load=True)
@@ -379,6 +498,46 @@ def test_catalog_search_does_not_fuzzy_match_tool_id_prefix() -> None:
     ] == ["navigate"]
 
 
+def test_catalog_search_uses_original_mcp_name_after_public_name_truncation() -> None:
+    catalog = MCPToolCatalog()
+    server_name = "pkulaw-law-search-semantic"
+    remote_name = "mcp-law-search-service.get_article"
+    target_name = mcp_loader._public_mcp_tool_name(
+        server_name,
+        remote_name,
+        "pkulaw",
+    )
+    target = FakeMCPTool(
+        target_name,
+        server_name,
+        "根据法规标题和条号获取法条内容。",
+        connector_id="pkulaw",
+        connector_name="北大法宝",
+        remote_name=remote_name,
+    )
+    distractor = FakeMCPTool(
+        mcp_loader._public_mcp_tool_name(
+            server_name,
+            "law_recognition.law_recognition",
+            "pkulaw",
+        ),
+        server_name,
+        "semantic search of law article.",
+        connector_id="pkulaw",
+        connector_name="北大法宝",
+        remote_name="law_recognition.law_recognition",
+    )
+    catalog.replace_server(server_name, [target, distractor])
+
+    hits = catalog.search_many(
+        ["法条精确取条", "get article"],
+        top_k=1,
+    )
+
+    assert "get_article" not in target_name
+    assert [entry.model_name for entry in hits] == [target_name]
+
+
 def test_catalog_deduplicates_server_terms_already_present_in_model_name() -> None:
     catalog = MCPToolCatalog()
     duplicate = FakeMCPTool(
@@ -471,7 +630,7 @@ def test_search_provider_schemas_do_not_require_top_level_unions() -> None:
         assert schema["type"] == "object"
         assert not {"anyOf", "oneOf", "allOf"}.intersection(schema)
         assert set(schema["properties"]) == {
-            "query", "queries", "tool_names", "server_name", "top_k",
+            "query", "queries", "tool_names", "server_name", "connector", "top_k",
         }
         assert schema["additionalProperties"] is False
 
@@ -581,6 +740,66 @@ async def test_exact_tool_names_activate_only_explicit_selections() -> None:
         {"get_forecast", "get_air_quality"}
     )
     assert "get_weather_alerts" not in exposure.offered_names
+
+
+@pytest.mark.asyncio
+async def test_exact_original_mcp_name_activates_provider_safe_connector_tool() -> None:
+    catalog = MCPToolCatalog()
+    server_name = "pkulaw-law-search-semantic"
+    remote_name = "mcp-law-search-service.get_article"
+    model_name = mcp_loader._public_mcp_tool_name(
+        server_name,
+        remote_name,
+        "pkulaw",
+    )
+    tool = FakeMCPTool(
+        model_name,
+        server_name,
+        "根据法规标题和条号获取法条内容。",
+        connector_id="pkulaw",
+        connector_name="北大法宝",
+        remote_name=remote_name,
+    )
+    catalog.replace_server(server_name, [tool])
+    activated = OrderedDict()
+    search = ToolSearchTool(
+        catalog,
+        activated,
+        allowed_connector_ids_provider=lambda: frozenset({"pkulaw"}),
+    )
+
+    result = await search.execute(
+        connector="pkulaw",
+        tool_names=[remote_name],
+    )
+
+    payload = json.loads(result.content)
+    assert payload["matched_count"] == 1
+    assert payload["missing"] == []
+    assert [item["name"] for item in payload["activated"]] == [model_name]
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_original_mcp_name_requires_server_qualification() -> None:
+    catalog = MCPToolCatalog()
+    catalog.replace_server(
+        "law",
+        [FakeMCPTool("mcp__law__search", "law", remote_name="search")],
+    )
+    catalog.replace_server(
+        "cases",
+        [FakeMCPTool("mcp__cases__search", "cases", remote_name="search")],
+    )
+    activated = OrderedDict()
+    search = ToolSearchTool(catalog, activated)
+
+    ambiguous = await search.execute(tool_names=["search"])
+    qualified = await search.execute(tool_names=["law/search"])
+
+    assert json.loads(ambiguous.content)["missing"] == ["search"]
+    assert [
+        item["name"] for item in json.loads(qualified.content)["activated"]
+    ] == ["mcp__law__search"]
 
 
 @pytest.mark.asyncio

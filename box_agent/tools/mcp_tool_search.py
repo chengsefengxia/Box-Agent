@@ -73,13 +73,16 @@ class ToolSearchTool(Tool):
             "deferred catalog tools are not exposed, while alwaysLoad tools remain "
             "visible without search. Use query for one keyword search, queries for "
             "independent bilingual or synonymous searches, or tool_names to activate "
-            "only exact catalog IDs or names. Passing only server_name activates all "
-            "tools from that one enabled server. Provide at least one non-empty query, "
-            "queries, tool_names, or server_name input; they may be combined. "
-            "Prefer short capability, server, or tool "
+            "only exact catalog IDs, model-facing names, or unique original MCP names. "
+            "Passing only server_name activates all tools from that one enabled server. "
+            "Provide at least one non-empty query, queries, tool_names, server_name, or "
+            "connector input; they may be combined. Prefer short capability, server, "
+            "connector, or tool "
             "keywords; task-specific operands are tolerated but should be omitted "
-            "when possible. Set top_k to however many matching tool "
-            "schemas the task actually needs, including ten or more when appropriate. "
+            "when possible. Passing only connector activates all tools owned by "
+            "the uniquely matched enabled connector. Set top_k to however many "
+            "matching tool schemas the task actually needs, including ten or more "
+            "when appropriate. "
             "A query hit may activate a protocol-required companion, such as the "
             "snapshot paired with managed browser navigation, in addition to top_k. "
             "The response reports catalog_tool_count for the applied server scope, "
@@ -118,17 +121,28 @@ class ToolSearchTool(Tool):
                     "items": {"type": "string"},
                     "minItems": 1,
                     "description": (
-                        "Exact tool IDs or names to activate, such as "
-                        "mcp:server/tool or server/tool. No fuzzy fallback is used, "
-                        "and unlisted catalog tools remain hidden."
+                        "Exact tool IDs, model-facing names, or unique original MCP names "
+                        "to activate, such as mcp:server/tool, server/tool, or an "
+                        "MCP tools/list name. No fuzzy fallback is used, and unlisted "
+                        "catalog tools remain hidden."
                     ),
                 },
                 "server_name": {
                     "type": "string",
                     "description": (
-                        "Exact MCP server name from <connector-status>. On its own, "
-                        "activates all tools from that enabled server; with query or "
+                        "Exact internal MCP server name. On its own, activates all "
+                        "tools from that enabled server; with query, connector, or "
                         "tool_names, it narrows the normal discovery scope."
+                    ),
+                },
+                "connector": {
+                    "type": "string",
+                    "description": (
+                        "Connector ID or unique display-name text from "
+                        "<connector-status>, such as pkulaw or 北大法宝. On its "
+                        "own, activates all tools owned by that enabled connector; "
+                        "with query, server_name, or tool_names, it narrows the "
+                        "normal discovery scope."
                     ),
                 },
                 "top_k": {
@@ -153,6 +167,7 @@ class ToolSearchTool(Tool):
         queries: list[str] | None = None,
         tool_names: list[str] | None = None,
         server_name: str | None = None,
+        connector: str | None = None,
         top_k: int = 1,
     ) -> ToolResult:
         normalized_server_name = (
@@ -170,16 +185,33 @@ class ToolSearchTool(Tool):
             for item in tool_names or []
             if isinstance(item, str) and item.strip()
         ]
+        normalized_connector = (
+            connector.strip()
+            if isinstance(connector, str) and connector.strip()
+            else None
+        )
         search_input = {
             "query": query,
             "queries": normalized_queries,
             "tool_names": normalized_tool_names,
             "server_name": normalized_server_name,
+            "connector": normalized_connector,
         }
+        connector_direct = bool(
+            normalized_connector
+            and not normalized_server_name
+            and not normalized_queries
+            and not normalized_tool_names
+        )
         server_direct = bool(
             normalized_server_name and not normalized_queries and not normalized_tool_names
         )
-        if not normalized_queries and not normalized_tool_names and not server_direct:
+        if (
+            not normalized_queries
+            and not normalized_tool_names
+            and not server_direct
+            and not connector_direct
+        ):
             payload = {
                 "success": False,
                 **search_input,
@@ -190,9 +222,7 @@ class ToolSearchTool(Tool):
                 "activated": [],
                 "conflicts": [],
                 "missing": [],
-                "notice": (
-                    "Provide query, queries, exact tool_names, or server_name."
-                ),
+                "notice": "Provide query, queries, exact tool_names, server_name, or connector.",
             }
             return ToolResult(
                 success=False,
@@ -223,43 +253,59 @@ class ToolSearchTool(Tool):
                 error="MCP catalog is still loading; retry tool_search shortly.",
             )
 
+        resolved_connector_id = (
+            self._catalog.resolve_connector_id(
+                normalized_connector,
+                entry_filter=self._entry_is_allowed,
+            )
+            if normalized_connector
+            else None
+        )
+
+        def entry_is_in_scope(entry) -> bool:
+            if not self._entry_is_allowed(entry):
+                return False
+            if normalized_connector and (
+                resolved_connector_id is None
+                or entry.connector_id != resolved_connector_id
+            ):
+                return False
+            return normalized_server_name is None or entry.server_name == normalized_server_name
+
+        search_input["resolved_connector_id"] = resolved_connector_id
         catalog_tool_count = sum(
-            1
-            for entry in self._catalog.snapshot()
-            if normalized_server_name is None
-            or entry.server_name == normalized_server_name
-            if self._entry_is_allowed(entry)
+            1 for entry in self._catalog.snapshot() if entry_is_in_scope(entry)
         )
         missing: list[str] = []
-        if server_direct:
+        if connector_direct or server_direct:
             hits = [
                 entry
                 for entry in self._catalog.snapshot()
-                if entry.server_name == normalized_server_name and self._entry_is_allowed(entry)
+                if entry_is_in_scope(entry)
             ]
         elif normalized_tool_names:
             hits, missing = self._catalog.lookup_exact(
                 normalized_tool_names,
                 server_name=normalized_server_name,
-                entry_filter=self._entry_is_allowed,
+                entry_filter=entry_is_in_scope,
             )
         else:
             hits = self._catalog.search_many(
                 normalized_queries,
                 server_name=normalized_server_name,
                 top_k=top_k,
-                entry_filter=self._entry_is_allowed,
+                entry_filter=entry_is_in_scope,
             )
         query_matched_count = len(hits)
         hit_ids = {entry.tool_id for entry in hits}
         companion_entries = []
-        if not normalized_tool_names and not server_direct:
+        if not normalized_tool_names and not server_direct and not connector_direct:
             for entry in tuple(hits):
                 for companion_name in _ACTIVATION_COMPANIONS.get(entry.model_name, ()):
                     companions, _ = self._catalog.lookup_exact(
                         [companion_name],
                         server_name=entry.server_name,
-                        entry_filter=self._entry_is_allowed,
+                        entry_filter=entry_is_in_scope,
                     )
                     for companion in companions:
                         if companion.tool_id in hit_ids:
