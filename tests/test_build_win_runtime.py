@@ -14,14 +14,26 @@ def test_windows_builder_uses_shared_pyinstaller_contract() -> None:
     collect = build_win_runtime._windows_pyinstaller_collect_args()
 
     assert hidden == build_runtime.pyinstaller_hidden_imports(
-        external_python_sandbox=False
+        external_python_sandbox=True
     )
     assert collect == build_runtime.pyinstaller_collect_args(
-        external_python_sandbox=False
+        external_python_sandbox=True
     )
     assert "box_agent.mcp_servers" in hidden
     assert "box_agent.mcp_servers.web_extract" in hidden
     assert "box_agent.mcp_servers.web_extract_server" in hidden
+    assert "PIL.Image" in hidden
+    assert "ipykernel" not in hidden
+    assert "sklearn" not in collect
+
+
+def test_windows_legacy_bundle_remains_explicitly_available() -> None:
+    assert build_win_runtime._windows_pyinstaller_hidden_imports(
+        external_python_sandbox=False
+    ) == build_runtime.pyinstaller_hidden_imports(external_python_sandbox=False)
+    assert build_win_runtime._windows_pyinstaller_collect_args(
+        external_python_sandbox=False
+    ) == build_runtime.pyinstaller_collect_args(external_python_sandbox=False)
 
 
 def test_windows_pyinstaller_command_includes_web_extract_server(
@@ -49,6 +61,9 @@ def test_windows_pyinstaller_command_includes_web_extract_server(
         "box_agent.mcp_servers.web_extract_server",
     ) in hidden_pairs
     assert (bin_dir / "box-agent-acp.exe").is_file()
+    assert ("--exclude-module", "ipykernel") in hidden_pairs
+    assert ("--exclude-module", "sklearn") in hidden_pairs
+    assert ("--hidden-import", "PIL.Image") in hidden_pairs
 
     add_data_values = [
         captured[index + 1]
@@ -81,12 +96,8 @@ def test_windows_manifest_advertises_bundled_web_extract_mcp(
     assert manifest["connector_skill_sources_version"] == 1
     assert manifest["mcp_multi_source_version"] == 1
     assert "connector_mcp_proxy_version" not in manifest
-    assert manifest["external_python_sandbox"] is False
-    assert manifest["bundled_stable_runtimes"] == [
-        "portable_git",
-        "python",
-        "node",
-    ]
+    assert manifest["external_python_sandbox"] is True
+    assert manifest["bundled_stable_runtimes"] == []
     assert manifest["mcp_servers"] == {
         "box-agent-web-extract": {
             "entry": "bin/box-agent-acp.exe",
@@ -95,3 +106,12 @@ def test_windows_manifest_advertises_bundled_web_extract_mcp(
         }
     }
     assert (runtime_dir / "VERSION").read_text(encoding="utf-8") == "0.9.7\n"
+
+
+def test_windows_legacy_manifest_lists_its_bundled_tools(tmp_path: Path) -> None:
+    build_win_runtime._write_manifest(
+        tmp_path, "0.9.7", external_python_sandbox=False
+    )
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["external_python_sandbox"] is False
+    assert manifest["bundled_stable_runtimes"] == ["portable_git", "python", "node"]
