@@ -74,6 +74,13 @@ MAX_EXECUTE_CODE_CHARS_DISPLAY = f"{MAX_EXECUTE_CODE_CHARS:,}"
 RUNTIME_PACKAGES_DIR = Path.home() / ".box-agent" / "runtime-packages"
 
 
+def _windows_minimal_runtime(runtime_env: Mapping[str, str] | None = None) -> bool:
+    return sys.platform == "win32" and (
+        (runtime_env or {}).get("BOX_AGENT_RUNTIME_PROFILE")
+        or os.environ.get("BOX_AGENT_RUNTIME_PROFILE")
+    ) == "windows-minimal-v1"
+
+
 async def _communicate_sandbox_process(
     proc: asyncio.subprocess.Process,
     *,
@@ -716,7 +723,9 @@ class SandboxEnvironment:
         # In bundled-override mode the kernel subprocess won't inherit our
         # patched sys.path, so expose RUNTIME_PACKAGES_DIR via PYTHONPATH on
         # the kernel spec instead.
-        if self._bundled_override and RUNTIME_PACKAGES_DIR.exists():
+        if self._bundled_override and (
+            RUNTIME_PACKAGES_DIR.exists() or _windows_minimal_runtime(self.runtime_env)
+        ):
             spec["env"] = {"PYTHONPATH": str(RUNTIME_PACKAGES_DIR)}
         return spec
 
@@ -782,6 +791,12 @@ class SandboxEnvironment:
                 return False, self._package_not_allowed_message(blocked)
 
         RUNTIME_PACKAGES_DIR.mkdir(parents=True, exist_ok=True)
+        constraint_args: list[str] = []
+        if _windows_minimal_runtime(self.runtime_env):
+            constraints = self.python_path.parent.parent.parent / "python-core-constraints.txt"
+            if constraints.is_file():
+                # Scenario installs must not shadow the host's working kernel with a different core version.
+                constraint_args = ["--constraint", str(constraints)]
         proc = await asyncio.create_subprocess_exec(
             str(self.python_path),
             "-m",
@@ -792,6 +807,7 @@ class SandboxEnvironment:
             "--quiet",
             "--disable-pip-version-check",
             "--no-warn-script-location",
+            *constraint_args,
             *packages,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -1497,7 +1513,7 @@ class JupyterSandboxTool(Tool):
 
     @property
     def description(self) -> str:
-        return f"""Execute Python code in a persistent Jupyter kernel sandbox.
+        description = f"""Execute Python code in a persistent Jupyter kernel sandbox.
 
 This tool runs Python code in a **real Jupyter kernel** with its own isolated environment:
 - Variables, functions, classes, imports all persist between calls
@@ -1534,6 +1550,18 @@ Output formats:
 - Images (matplotlib plots)
 - Errors (simplified tracebacks)
 """
+        if _windows_minimal_runtime(self.runtime_env):
+            start = description.index("- Pre-installed packages:")
+            end = description.index("- Ideal for data analysis:", start)
+            description = description[:start] + (
+                "- Python, pip and the Jupyter kernel are provided by the Windows host.\n"
+                "- Data, document and plotting packages are NOT guaranteed to be pre-installed.\n"
+                "- Try the import first; an allowed missing module is installed automatically and retried once.\n"
+                "- Additional packages need network access on first use and are reused afterwards.\n"
+                "- Do not upgrade the Python/kernel bootstrap packages.\n"
+            ) + description[end:]
+            description = description.replace("from bs4 import BeautifulSoup  # already installed", "from bs4 import BeautifulSoup  # installed on demand if missing")
+        return description
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -1714,12 +1742,16 @@ Output formats:
                     pip_name = self._MODULE_TO_PIP.get(pkg, pkg)
                     ok, _ = await env.install_packages([pip_name])
                     if ok:
+                        retry_code = code
+                        if _windows_minimal_runtime(self.runtime_env):
+                            # The first install may create a previously missing PYTHONPATH directory.
+                            retry_code = "import importlib; importlib.invalidate_caches()\n" + code
                         stdout, images, error = await asyncio.wait_for(
                             loop.run_in_executor(
                                 None,
                                 self._execute_session_code,
                                 session,
-                                code,
+                                retry_code,
                                 timeout,
                             ),
                             timeout=_EXEC_TIMEOUT,

@@ -277,6 +277,8 @@ def _write_manifest(
             external_python_sandbox=external_python_sandbox,
         ),
     )
+    if external_python_sandbox:
+        manifest["windows_runtime_profiles"] = ["windows-minimal-v1"]
     (runtime_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )

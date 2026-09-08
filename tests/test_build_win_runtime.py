@@ -98,6 +98,7 @@ def test_windows_manifest_advertises_bundled_web_extract_mcp(
     assert "connector_mcp_proxy_version" not in manifest
     assert manifest["external_python_sandbox"] is True
     assert manifest["bundled_stable_runtimes"] == []
+    assert manifest["windows_runtime_profiles"] == ["windows-minimal-v1"]
     assert manifest["mcp_servers"] == {
         "box-agent-web-extract": {
             "entry": "bin/box-agent-acp.exe",
@@ -114,4 +115,5 @@ def test_windows_legacy_manifest_lists_its_bundled_tools(tmp_path: Path) -> None
     )
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["external_python_sandbox"] is False
+    assert "windows_runtime_profiles" not in manifest
     assert manifest["bundled_stable_runtimes"] == ["portable_git", "python", "node"]
