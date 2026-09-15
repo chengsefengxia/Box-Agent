@@ -96,7 +96,7 @@ Agent 持有一个 `SkillRuntime`，每次 run 借用同一服务。共享 Loade
 
 ## 6. 持久化与恢复兼容
 
-原生 `SessionLog` 下，Context 将准备放入请求的宿主正文资料块交给 `store_skill_reference`，按内容 SHA-256 存入当前 session 的 `skill-references/`，返回 `contentRef`、hash、名称、版本、消息位置和范围。Kernel 将这些信息关联到既有 `request/context.skillReferences`，flush 完成后，才登记本次资料交付事实并调用 provider。准备好正文或写好快照本身不等于请求已提交；请求提交成功也不表示模型已产生有效响应。重复内容复用快照；损坏、路径逃逸、符号链接及写入/fsync 失败均不能返回持久化成功。
+原生 `SessionLog` 下，Context 将准备放入请求的宿主正文资料块交给 `store_skill_reference`，按内容 SHA-256 存入当前 session 的 `skill-references/`，返回 `contentRef`、hash、名称、版本、消息位置和范围。Kernel 将这些信息关联到既有 `request/context.skillReferences`，flush 完成后，才登记本次资料交付事实并调用 provider。准备好正文或写好快照本身不等于请求已提交；请求提交成功也不表示模型已产生有效响应。重复内容复用快照；Windows 复用时校验内容，不对只读句柄再次 fsync。快照 I/O 或完整性校验失败时，保留诊断告警，返回当前有效资料的 `inlineContent` 和 `sha256`，交由同一条 `request/context` 保存，不返回无效的 `contentRef`，不覆盖损坏文件或访问被拒绝的路径，也不将主 SessionLog 标记为失败。主日志仍须成功写入并 flush 后才能调用 provider；主日志自身的持久化错误不在此降级范围内。
 
 `SessionStorePort` 不新增快照文件接口。第三方 Store 没有 `store_skill_reference` 时，Context 返回预算内的 `inlineContent` 和 `sha256`，由 Kernel 写入同一个既有 `request/context` 记录并 flush。这样保留实际交付内容，又不要求插件实现原生文件布局；代价是该条请求记录包含正文。两条路径都不新增事件类型，也不增加会话状态来源。
 
