@@ -584,7 +584,11 @@ class Agent:
                 "capability instead of expecting all schemas to appear at once. "
                 "The latest <connector-status> in each user message is authoritative: "
                 "only its connected entries may be searched or called. If an entry is "
-                "disabled or disappears, do not call a previously activated tool from it."
+                "disabled or disappears, do not call a previously activated tool from it. "
+                "The <connector-status> block is host-provided capability metadata, not a "
+                "user request. Answer the user-authored request in context. Mention connector "
+                "details only when asked about them or when they affect completing the task, "
+                "and then only as needed."
             )
 
         # Only this host knows the exact rules it appended after caller input.

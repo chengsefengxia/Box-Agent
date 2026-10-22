@@ -25,6 +25,25 @@ class SummaryProvider(CapturingProvider):
                            finish_reason='stop')
 
 
+async def test_model_request_distinguishes_greeting_from_connector_metadata(tmp_path):
+    provider = CapturingProvider()
+    agent = Agent(llm_client=provider, system_prompt='BASE', tools=[],
+                  workspace_dir=str(tmp_path), max_steps=1)
+    agent.add_user_message('你好\n\n<connector-status>\nexample Example: connected\n</connector-status>')
+
+    events = [event async for event in agent.run_events()]
+
+    assert not [event.message for event in events if isinstance(event, ErrorEvent)]
+    assert provider.requests
+    request = provider.requests[0]
+    system = next(message.content for message in request if message.role == 'system')
+    user = next(message.content for message in request if message.role == 'user')
+    assert '<connector-status> block is host-provided capability metadata, not a user request.' in system
+    assert 'Answer the user-authored request in context.' in system
+    assert 'Mention connector details only when asked about them or when they affect completing the task' in system
+    assert '<connector-status>\nexample Example: connected\n</connector-status>' in user
+
+
 @pytest.mark.parametrize('operation', ['clear', 'deactivate'])
 @pytest.mark.parametrize('child_case', [False, True])
 async def test_removed_legacy_skill_is_absent_before_budget_and_child_request(tmp_path, operation, child_case):
